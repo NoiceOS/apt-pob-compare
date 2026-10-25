@@ -55,6 +55,21 @@ index 40efa38..911fe5a 100644
    define: {
      'process.env.STATIC': (isDev) ? '"../build/icons"' : '"."',
      'process.env.VITE_DEV_SERVER_URL': (isDev) ? '"http://localhost:5173"' : 'null'
+diff --git a/main/src/AppUpdater.ts b/main/src/AppUpdater.ts
+index 29b51bc..cbeee35 100644
+--- a/main/src/AppUpdater.ts
++++ b/main/src/AppUpdater.ts
+@@ -36,7 +36,9 @@ export class AppUpdater {
+ 
+     if (!autoUpdater.autoDownload || process.platform === 'darwin') {
+       this.noAutoUpdatesReason = 'not-supported'
+-    } else if (process.argv.includes('--no-updates')) {
++    } else {
++      // unofficial build (PoB comparison): an official update would replace it,
++      // so always behave as if started with `--no-updates`
+       autoUpdater.autoDownload = false
+       this.noAutoUpdatesReason = 'disabled-by-flag'
+     }
 diff --git a/main/src/main.ts b/main/src/main.ts
 index d8bb9ca..0a790cc 100644
 --- a/main/src/main.ts
@@ -244,10 +259,10 @@ index 9d5e69c..b931c29 100644
    props: {
      item: {
 diff --git a/renderer/src/web/price-check/settings-price-check.vue b/renderer/src/web/price-check/settings-price-check.vue
-index a8b764d..314e27f 100644
+index a8b764d..481dbd0 100644
 --- a/renderer/src/web/price-check/settings-price-check.vue
 +++ b/renderer/src/web/price-check/settings-price-check.vue
-@@ -50,6 +50,19 @@
+@@ -50,6 +50,20 @@
          <ui-radio v-model="searchStatRange" :value="0">{{ t(':fill_roll_exact') }}</ui-radio>
        </div>
      </div>
@@ -262,12 +277,13 @@ index a8b764d..314e27f 100644
 +        <div class="italic text-gray-500 mb-3">A Path of Building Community source folder (containing "src" and "runtime"). Leave empty to only compare item mods.</div>
 +        <div class="mb-1">LuaJIT executable</div>
 +        <input v-model.trim="pobLuajit" placeholder="luajit" class="rounded bg-gray-900 px-1 block w-full mb-1" />
++        <div class="italic text-gray-500">Full path. On Windows: luajit.exe from the "luajit-win64" folder.</div>
 +      </div>
 +    </div>
      <ui-checkbox class="mb-4"
        v-model="activateStockFilter">{{ t(':select_stock') }}</ui-checkbox>
      <ui-checkbox class="mb-4"
-@@ -130,6 +143,18 @@ export default defineComponent({
+@@ -130,6 +144,18 @@ export default defineComponent({
        accountName: configModelValue(() => props.config, 'accountName'),
        showSeller: configModelValue(() => configWidget.value, 'showSeller'),
        activateStockFilter: configModelValue(() => configWidget.value, 'activateStockFilter'),
@@ -288,10 +304,10 @@ index a8b764d..314e27f 100644
        requestPricePrediction: configModelValue(() => configWidget.value, 'requestPricePrediction'),
 diff --git a/main/src/pob/PobCalc.ts b/main/src/pob/PobCalc.ts
 new file mode 100644
-index 0000000..3b5eae7
+index 0000000..9d1c476
 --- /dev/null
 +++ b/main/src/pob/PobCalc.ts
-@@ -0,0 +1,201 @@
+@@ -0,0 +1,210 @@
 +import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 +import fs from 'node:fs'
 +import path from 'node:path'
@@ -382,17 +398,26 @@ index 0000000..3b5eae7
 +    if (!fs.existsSync(path.join(srcDir, 'HeadlessWrapper.lua'))) {
 +      return Promise.reject(new Error(`Path of Building not found in "${pobPath}"`))
 +    }
++    if (process.platform === 'win32' && !path.isAbsolute(luajit)) {
++      return Promise.reject(new Error('Set the full path to luajit.exe in settings'))
++    }
 +    const bridgePath = path.join(app.getPath('userData'), 'apt-pob-bridge.lua')
 +    fs.writeFileSync(bridgePath, bridgeSource)
 +
 +    const runtimeDir = path.join(pobPath, 'runtime')
++    // On Windows, PoB's own DLLs are built for a different LuaJIT build,
++    // so C modules (lua-utf8.dll) must come from the folder of luajit.exe
++    const cpath = (process.platform === 'win32')
++      ? path.join(path.dirname(luajit), '?.dll')
++      : path.join(runtimeDir, '?.so')
 +    const proc = spawn(luajit || 'luajit', [bridgePath], {
 +      cwd: srcDir,
 +      env: {
 +        ...process.env,
-+        LUA_PATH: `${runtimeDir}/lua/?.lua;${runtimeDir}/lua/?/init.lua;;`,
-+        LUA_CPATH: `${runtimeDir}/?.so;;`
-+      }
++        LUA_PATH: `${path.join(runtimeDir, 'lua', '?.lua')};${path.join(runtimeDir, 'lua', '?', 'init.lua')};;`,
++        LUA_CPATH: `${cpath};;`
++      },
++      windowsHide: true
 +    })
 +    this.proc = proc
 +    this.stdoutBuffer = ''
@@ -495,10 +520,10 @@ index 0000000..3b5eae7
 +}
 diff --git a/main/src/pob/apt-bridge.lua b/main/src/pob/apt-bridge.lua
 new file mode 100644
-index 0000000..354bec0
+index 0000000..c40ff37
 --- /dev/null
 +++ b/main/src/pob/apt-bridge.lua
-@@ -0,0 +1,174 @@
+@@ -0,0 +1,178 @@
 +-- Awakened PoE Trade <-> Path of Building bridge.
 +-- Must be started with the working directory set to PoB's "src" folder.
 +-- Reads one JSON request per line on stdin, writes one JSON response per line
@@ -595,7 +620,11 @@ index 0000000..354bec0
 +local function compareItem (itemText, itemSetId)
 +	local itemsTab = build.itemsTab
 +	selectItemSet(itemSetId)
-+	local item = new("Item"):Item(itemText)
++	-- PoB <= 2.67 takes the raw text in the constructor, newer versions use :Item()
++	local ok, item = pcall(new, "Item", itemText)
++	if not ok then
++		item = new("Item"):Item(itemText)
++	end
 +	if not item.base then
 +		return { error = "Path of Building could not parse this item" }
 +	end
@@ -685,7 +714,7 @@ index 0000000..913a394
 +}
 diff --git a/renderer/src/web/price-check/pob-compare/PobCompare.vue b/renderer/src/web/price-check/pob-compare/PobCompare.vue
 new file mode 100644
-index 0000000..6353761
+index 0000000..016e79b
 --- /dev/null
 +++ b/renderer/src/web/price-check/pob-compare/PobCompare.vue
 @@ -0,0 +1,206 @@
@@ -829,7 +858,7 @@ index 0000000..6353761
 +  if (!info || !isComparable(item)) return
 +  const token = ++calcToken
 +  try {
-+    const result = await compare(item.rawText, itemSet)
++    const result = await compare(item.rawText.replace(/\r\n/g, '\n'), itemSet)
 +    if (token === calcToken) calc.value = result
 +  } catch (e) {
 +    if (token === calcToken) calcError.value = (e as Error).message
