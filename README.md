@@ -1,22 +1,24 @@
-# Awakened PoE Trade + comparaison PoB (Linux, non officiel)
+# Awakened PoE Trade + PoB comparison (Linux, unofficial)
 
-Version modifiée et **non officielle** d'[Awakened PoE Trade](https://github.com/SnosMe/awakened-poe-trade) 3.29.108 pour Path of Exile 1.
-Elle ajoute au price check (Ctrl+D) un bloc **« PoB Comparison »** : l'item vérifié est comparé à l'item équipé dans le même slot de ton build Path of Building, et **Path of Building recalcule** le DPS, l'EHP, la vie, les max hit, les résistances, etc.
+🇫🇷 [Version française](README.fr.md)
 
-> ⚠️ Ce n'est pas la version officielle. **Ne signale pas de bug à SnosMe**, ni sur le dépôt officiel d'APT, ni sur celui de Path of Building.
+An **unofficial** modified build of [Awakened PoE Trade](https://github.com/SnosMe/awakened-poe-trade) 3.29.108 for Path of Exile 1.
+It adds a **"PoB Comparison"** block to the price check (Ctrl+D). The checked item is compared to the item equipped in the same slot of your Path of Building build, and **Path of Building recalculates** your DPS, EHP, life, max hits, resistances and other stats.
 
-## Ce que ça affiche
+> ⚠️ This is not the official version. **Do not report bugs to SnosMe**, or on the official APT or Path of Building repositories.
 
-- En-tête **replié** : résumé `DPS ±x% · EHP ±y%`.
-- **Déplié** : toutes les stats modifiées par l'item, comme dans l'infobulle de PoB (avant → après, écart, %).
-- Choix du **set d'items** du build (leveling / endgame / maxed…) et du **slot** (Ring 1 / Ring 2, armes…).
-- Sans Path of Building configuré : comparaison simplifiée basée sur les mods (résistances vs cap, prérequis d'attributs, vie…).
+## What it shows
+
+- **Collapsed** header: a summary such as `DPS ±x% · EHP ±y%`.
+- **Expanded**: every stat the item changes, as in the PoB tooltip (before → after, difference, %).
+- A choice of the build's **item set** (leveling / endgame / maxed…) and **slot** (Ring 1 / Ring 2, weapons…).
+- Without Path of Building configured: a simpler comparison based on item mods only (resistances vs cap, attribute requirements, life…).
 
 ## Installation (Linux x86_64)
 
-### 1. Télécharger
+### 1. Download
 
-Depuis la page [**Releases**](../../releases) :
+From the [**Releases**](../../releases) page:
 - `Awakened-PoE-Trade-3.29.108-pob.AppImage`
 - `lua-utf8.so`
 
@@ -24,7 +26,7 @@ Depuis la page [**Releases**](../../releases) :
 chmod +x Awakened-PoE-Trade-3.29.108-pob.AppImage
 ```
 
-### 2. Installer LuaJIT
+### 2. Install LuaJIT
 
 ```bash
 sudo dnf install luajit      # Fedora
@@ -32,66 +34,65 @@ sudo apt install luajit      # Debian / Ubuntu
 sudo pacman -S luajit        # Arch
 ```
 
-Sur un système immuable (Bazzite, Silverblue…), tu peux passer par Homebrew : `brew install luajit`.
+On an immutable system (Bazzite, Silverblue…), you can use Homebrew: `brew install luajit`.
 
-### 3. Récupérer Path of Building Community
+### 3. Get Path of Building Community
 
 ```bash
 git clone --depth 1 https://github.com/PathOfBuildingCommunity/PathOfBuilding.git ~/PathOfBuilding
 cp lua-utf8.so ~/PathOfBuilding/runtime/
 ```
 
-Le fichier `lua-utf8.so` doit **obligatoirement** être dans le dossier `runtime/` de PoB.
-Version testée : PoB **2.67.2** (commit `16de4b8`). Pour mettre PoB à jour plus tard : `git -C ~/PathOfBuilding pull`.
+`lua-utf8.so` **must** be in PoB's `runtime/` folder.
+Tested with PoB **2.67.2** (commit `16de4b8`). To update PoB later: `git -C ~/PathOfBuilding pull`.
 
-### 4. Lancer
+### 4. Launch
 
 ```bash
 ./Awakened-PoE-Trade-3.29.108-pob.AppImage --no-updates
 ```
 
-**`--no-updates` est important** : sans ça, la mise à jour automatique d'APT remplace cette version par l'officielle, et la comparaison disparaît.
+**`--no-updates` matters.** Without it, APT's auto-update replaces this build with the official one, and the comparison is gone.
 
-### 5. Configurer
+### 5. Configure
 
-Dans les réglages d'APT → **Price check** → bloc **« Path of Building comparison »** :
+In APT settings → **Price check** → **"Path of Building comparison"** section:
 
-| Champ | Exemple |
+| Field | Example |
 |---|---|
-| Build link | `https://pobb.in/xxxx` (pobb.in, pastebin ou code PoB brut) |
-| Path of Building folder | `/home/<toi>/PathOfBuilding` |
-| LuaJIT executable | `/usr/bin/luajit` (ou `/home/linuxbrew/.linuxbrew/bin/luajit`) |
+| Build link | `https://pobb.in/xxxx` (pobb.in, pastebin or raw PoB code) |
+| Path of Building folder | `/home/<you>/PathOfBuilding` |
+| LuaJIT executable | `/usr/bin/luajit` (or `/home/linuxbrew/.linuxbrew/bin/luajit`) |
 
-Le chemin complet s'obtient avec `which luajit`. Mets bien le **chemin complet** : quand l'app est lancée depuis un menu, elle ne voit pas toujours le même `PATH` que le terminal.
+Run `which luajit` to get the full path. Use the **full path**: when the app is launched from a menu, it may not get the same `PATH` as your terminal.
 
-## Utilisation
+## Usage
 
-Ctrl+D sur un item en jeu → le bloc « PoB Comparison » apparaît au-dessus des filtres.
-Au premier check, Path of Building démarre en arrière-plan (~4 s), puis chaque comparaison est instantanée.
+Press Ctrl+D on an item in game. The "PoB Comparison" block appears above the filters.
+On the first check, Path of Building starts in the background (about 4 s). After that, each comparison is instant.
 
-## Limites
+## Limitations
 
-- Linux uniquement (pas de version Windows / macOS).
-- APT doit être réglé en **anglais** (comme le client du jeu).
-- La config PoB du build (charges, conditions, skill principal) est utilisée telle qu'elle a été exportée.
-- Si Path of Building ne sait pas lire un item, une erreur s'affiche à la place du calcul.
-- Les textes du panneau de comparaison sont en anglais.
+- Linux only (no Windows or macOS build).
+- APT must be set to **English** (like the game client).
+- The build's PoB configuration (charges, conditions, main skill) is used as exported.
+- If Path of Building can't parse an item, an error is shown instead of the calculation.
 
-## Dépannage
+## Troubleshooting
 
-| Message | Solution |
+| Message | Fix |
 |---|---|
-| `Cannot start LuaJIT` | Mauvais chemin LuaJIT → vérifier avec `which luajit` |
-| `Path of Building not found` | Le dossier doit contenir `src/HeadlessWrapper.lua` |
-| `module 'lua-utf8' not found` | `lua-utf8.so` absent de `PathOfBuilding/runtime/` |
-| `Could not load the build` | Vérifier le lien, ou ré-exporter depuis PoB |
+| `Cannot start LuaJIT` | Wrong LuaJIT path → check with `which luajit` |
+| `Path of Building not found` | The folder must contain `src/HeadlessWrapper.lua` |
+| `module 'lua-utf8' not found` | `lua-utf8.so` is missing from `PathOfBuilding/runtime/` |
+| `Could not load the build` | Check the link, or re-export the build from PoB |
 
-## Contenu du dépôt
+## Repository contents
 
-- `patches/awakened-poe-trade-3.29.108-pob-compare.patch` : les modifications du code source, à appliquer sur le tag `v3.29.108` d'APT (`git apply`).
-- `licenses/` : licences des projets utilisés.
+- `patches/awakened-poe-trade-3.29.108-pob-compare.patch`: the source code changes, to apply on APT's `v3.29.108` tag (`git apply`).
+- `licenses/`: licenses of the projects used.
 
-### Recompiler soi-même
+### Build it yourself
 
 ```bash
 git clone https://github.com/SnosMe/awakened-poe-trade.git && cd awakened-poe-trade
@@ -102,17 +103,17 @@ cd ../main && npm ci && npm run build
 npx electron-builder build --linux AppImage --publish never
 ```
 
-`lua-utf8.so` est compilé depuis [starwing/luautf8](https://github.com/starwing/luautf8) (commit `a47b143`) :
+`lua-utf8.so` is built from [starwing/luautf8](https://github.com/starwing/luautf8) (commit `a47b143`):
 
 ```bash
 gcc -O2 -shared -fPIC -I/usr/include/luajit-2.1 lutf8lib.c -o lua-utf8.so
 ```
 
-## Licences
+## Licenses
 
-Tous sous licence MIT, voir `licenses/` :
-- [Awakened PoE Trade](https://github.com/SnosMe/awakened-poe-trade) : © Alexander Drozdov
+All MIT licensed, see `licenses/`:
+- [Awakened PoE Trade](https://github.com/SnosMe/awakened-poe-trade): © Alexander Drozdov
 - [Path of Building Community](https://github.com/PathOfBuildingCommunity/PathOfBuilding)
-- [luautf8](https://github.com/starwing/luautf8) : © Xavier Wang
+- [luautf8](https://github.com/starwing/luautf8): © Xavier Wang
 
-Projet non affilié à Grinding Gear Games, ni approuvé par eux.
+Not affiliated with or endorsed by Grinding Gear Games.
