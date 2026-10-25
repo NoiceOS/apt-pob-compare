@@ -1,0 +1,1643 @@
+diff --git a/ipc/types.ts b/ipc/types.ts
+index 8fac182..16fcde4 100644
+--- a/ipc/types.ts
++++ b/ipc/types.ts
+@@ -77,7 +77,9 @@ export type IpcEvent =
+   IpcItemText |
+   IpcOcrText |
+   IpcConfigChanged |
+-  IpcUserAction
++  IpcUserAction |
++  IpcPobCalc |
++  IpcPobCalcResult
+ 
+ export type IpcEventPayload<Name extends IpcEvent['name'], T extends IpcEvent = IpcEvent> =
+   T extends { name: Name, payload: infer P } ? P : never
+@@ -176,6 +178,29 @@ type IpcUserAction =
+     text: string
+   }>
+ 
++export type PobCalcRequest = {
++  id: number
++  cmd: 'load'
++  xml: string
++  luajit: string
++  pobPath: string
++} | {
++  id: number
++  cmd: 'compare'
++  item: string
++  itemSet?: string
++}
++
++type IpcPobCalc =
++  Event<'CLIENT->MAIN::pob-calc', PobCalcRequest>
++
++type IpcPobCalcResult =
++  Event<'MAIN->CLIENT::pob-calc-result', {
++    id: number
++    result?: unknown
++    error?: string
++  }>
++
+ interface Event<TName extends string, TPayload = undefined> {
+   name: TName
+   payload: TPayload
+diff --git a/main/build/script.mjs b/main/build/script.mjs
+index 40efa38..911fe5a 100644
+--- a/main/build/script.mjs
++++ b/main/build/script.mjs
+@@ -32,6 +32,7 @@ const mainContext = await esbuild.context({
+   platform: 'node',
+   external: ['electron', 'uiohook-napi', 'electron-overlay-window'],
+   outfile: 'dist/main.js',
++  loader: { '.lua': 'text' },
+   define: {
+     'process.env.STATIC': (isDev) ? '"../build/icons"' : '"."',
+     'process.env.VITE_DEV_SERVER_URL': (isDev) ? '"http://localhost:5173"' : 'null'
+diff --git a/main/src/main.ts b/main/src/main.ts
+index d8bb9ca..0a790cc 100644
+--- a/main/src/main.ts
++++ b/main/src/main.ts
+@@ -1,61 +1,63 @@
+-'use strict'
+-
+-import { app } from 'electron'
+-import { uIOhook } from 'uiohook-napi'
+-import os from 'node:os'
+-import { startServer, eventPipe, server } from './server'
+-import { Logger } from './RemoteLogger'
+-import { GameWindow } from './windowing/GameWindow'
+-import { OverlayWindow } from './windowing/OverlayWindow'
+-import { GameConfig } from './host-files/GameConfig'
+-import { Shortcuts } from './shortcuts/Shortcuts'
+-import { AppUpdater } from './AppUpdater'
+-import { AppTray } from './AppTray'
+-import { OverlayVisibility } from './windowing/OverlayVisibility'
+-import { GameLogWatcher } from './host-files/GameLogWatcher'
+-import { HttpProxy } from './proxy'
+-
+-if (!app.requestSingleInstanceLock()) {
+-  app.exit()
+-}
+-
+-if (process.platform !== 'darwin') {
+-  app.disableHardwareAcceleration()
+-}
+-app.enableSandbox()
+-
+-let tray: AppTray
+-
+-app.on('ready', async () => {
+-  tray = new AppTray(eventPipe)
+-  const logger = new Logger(eventPipe)
+-  const gameLogWatcher = new GameLogWatcher(eventPipe, logger)
+-  const gameConfig = new GameConfig(eventPipe, logger)
+-  const poeWindow = new GameWindow()
+-  const appUpdater = new AppUpdater(eventPipe)
+-  const _httpProxy = new HttpProxy(server, logger)
+-
+-  setTimeout(
+-    async () => {
+-      const overlay = new OverlayWindow(eventPipe, logger, poeWindow)
+-      new OverlayVisibility(eventPipe, overlay, gameConfig)
+-      const shortcuts = await Shortcuts.create(logger, overlay, poeWindow, gameConfig, eventPipe)
+-      eventPipe.onEventAnyClient('CLIENT->MAIN::update-host-config', (cfg) => {
+-        overlay.updateOpts(cfg.overlayKey, cfg.windowTitle)
+-        shortcuts.updateActions(cfg.shortcuts, cfg.stashScroll, cfg.logKeys, cfg.restoreClipboard, cfg.language)
+-        gameLogWatcher.restart(cfg.clientLog ?? '')
+-        gameConfig.readConfig(cfg.gameConfig ?? '')
+-        appUpdater.checkAtStartup()
+-        tray.overlayKey = cfg.overlayKey
+-      })
+-      uIOhook.start()
+-      const port = await startServer(appUpdater, logger)
+-      // TODO: move up (currently crashes)
+-      logger.write(`info ${os.type()} ${os.release} / v${app.getVersion()}`)
+-      overlay.loadAppPage(port)
+-      tray.serverPort = port
+-    },
+-    // fixes(linux): window is black instead of transparent
+-    process.platform === 'linux' ? 1000 : 0
+-  )
+-})
++'use strict'
++
++import { app } from 'electron'
++import { uIOhook } from 'uiohook-napi'
++import os from 'node:os'
++import { startServer, eventPipe, server } from './server'
++import { Logger } from './RemoteLogger'
++import { GameWindow } from './windowing/GameWindow'
++import { OverlayWindow } from './windowing/OverlayWindow'
++import { GameConfig } from './host-files/GameConfig'
++import { Shortcuts } from './shortcuts/Shortcuts'
++import { AppUpdater } from './AppUpdater'
++import { AppTray } from './AppTray'
++import { OverlayVisibility } from './windowing/OverlayVisibility'
++import { GameLogWatcher } from './host-files/GameLogWatcher'
++import { HttpProxy } from './proxy'
++import { PobCalc } from './pob/PobCalc'
++
++if (!app.requestSingleInstanceLock()) {
++  app.exit()
++}
++
++if (process.platform !== 'darwin') {
++  app.disableHardwareAcceleration()
++}
++app.enableSandbox()
++
++let tray: AppTray
++
++app.on('ready', async () => {
++  tray = new AppTray(eventPipe)
++  const logger = new Logger(eventPipe)
++  const gameLogWatcher = new GameLogWatcher(eventPipe, logger)
++  const gameConfig = new GameConfig(eventPipe, logger)
++  const poeWindow = new GameWindow()
++  const appUpdater = new AppUpdater(eventPipe)
++  const _httpProxy = new HttpProxy(server, logger)
++  const _pobCalc = new PobCalc(eventPipe, logger)
++
++  setTimeout(
++    async () => {
++      const overlay = new OverlayWindow(eventPipe, logger, poeWindow)
++      new OverlayVisibility(eventPipe, overlay, gameConfig)
++      const shortcuts = await Shortcuts.create(logger, overlay, poeWindow, gameConfig, eventPipe)
++      eventPipe.onEventAnyClient('CLIENT->MAIN::update-host-config', (cfg) => {
++        overlay.updateOpts(cfg.overlayKey, cfg.windowTitle)
++        shortcuts.updateActions(cfg.shortcuts, cfg.stashScroll, cfg.logKeys, cfg.restoreClipboard, cfg.language)
++        gameLogWatcher.restart(cfg.clientLog ?? '')
++        gameConfig.readConfig(cfg.gameConfig ?? '')
++        appUpdater.checkAtStartup()
++        tray.overlayKey = cfg.overlayKey
++      })
++      uIOhook.start()
++      const port = await startServer(appUpdater, logger)
++      // TODO: move up (currently crashes)
++      logger.write(`info ${os.type()} ${os.release} / v${app.getVersion()}`)
++      overlay.loadAppPage(port)
++      tray.serverPort = port
++    },
++    // fixes(linux): window is black instead of transparent
++    process.platform === 'linux' ? 1000 : 0
++  )
++})
+diff --git a/main/src/proxy.ts b/main/src/proxy.ts
+index cb209c0..db05e24 100644
+--- a/main/src/proxy.ts
++++ b/main/src/proxy.ts
+@@ -9,6 +9,8 @@ const PROXY_HOSTS = [
+   { host: 'poe.kakaogames.com', official: true },
+   { host: 'poe.ninja', official: false },
+   { host: 'www.poeprices.info', official: false },
++  { host: 'pobb.in', official: false },
++  { host: 'pastebin.com', official: false },
+ ]
+ 
+ export class HttpProxy {
+diff --git a/renderer/src/web/overlay/widgets.ts b/renderer/src/web/overlay/widgets.ts
+index bdb87d3..3a21853 100644
+--- a/renderer/src/web/overlay/widgets.ts
++++ b/renderer/src/web/overlay/widgets.ts
+@@ -49,6 +49,11 @@ export interface PriceCheckWidget extends Widget {
+   activateStockFilter: boolean
+   merchantOnly: boolean
+   defaultCurrency: string | null
++  pobLink?: string
++  pobItemSet?: string
++  pobCompareCollapsed?: boolean
++  pobLuajit?: string
++  pobPath?: string
+   showCursor: boolean
+   requestPricePrediction: boolean
+   builtinBrowser: boolean
+diff --git a/renderer/src/web/price-check/CheckedItem.vue b/renderer/src/web/price-check/CheckedItem.vue
+index 9d5e69c..b931c29 100644
+--- a/renderer/src/web/price-check/CheckedItem.vue
++++ b/renderer/src/web/price-check/CheckedItem.vue
+@@ -8,6 +8,7 @@
+     <price-trend v-else
+       :item="item"
+       :filters="itemFilters" />
++    <pob-compare :item="item" />
+     <filters-block
+       ref="filtersComponent"
+       :filters="itemFilters"
+@@ -67,6 +68,7 @@ import PricePrediction from './price-prediction/PricePrediction.vue'
+ import StackValue from './expected-value/StackValue.vue'
+ import DustValue from './expected-value/DustValue.vue'
+ import FilterName from './filters/FilterName.vue'
++import PobCompare from './pob-compare/PobCompare.vue'
+ import { CATEGORY_TO_TRADE_ID, createTradeRequest } from './trade/pathofexile-trade'
+ import { AppConfig } from '@/web/Config'
+ import { FilterPreset } from './filters/interfaces'
+@@ -86,7 +88,8 @@ export default defineComponent({
+     FiltersBlock,
+     FilterName,
+     StackValue,
+-    DustValue
++    DustValue,
++    PobCompare
+   },
+   props: {
+     item: {
+diff --git a/renderer/src/web/price-check/settings-price-check.vue b/renderer/src/web/price-check/settings-price-check.vue
+index a8b764d..314e27f 100644
+--- a/renderer/src/web/price-check/settings-price-check.vue
++++ b/renderer/src/web/price-check/settings-price-check.vue
+@@ -50,6 +50,19 @@
+         <ui-radio v-model="searchStatRange" :value="0">{{ t(':fill_roll_exact') }}</ui-radio>
+       </div>
+     </div>
++    <div class="border-2 rounded border-gray-700 mb-4">
++      <div class="bg-gray-700 p-2">Path of Building comparison</div>
++      <div class="p-2">
++        <div class="mb-1">Build link</div>
++        <input v-model.trim="pobLink" placeholder="https://pobb.in/..." class="rounded bg-gray-900 px-1 block w-full mb-1" />
++        <div class="italic text-gray-500 mb-3">pobb.in, pastebin or raw PoB code. The checked item is compared to the item equipped in the same slot.</div>
++        <div class="mb-1">Path of Building folder (for DPS / EHP calculations)</div>
++        <input v-model.trim="pobPath" placeholder="/path/to/PathOfBuilding" class="rounded bg-gray-900 px-1 block w-full mb-1" />
++        <div class="italic text-gray-500 mb-3">A Path of Building Community source folder (containing "src" and "runtime"). Leave empty to only compare item mods.</div>
++        <div class="mb-1">LuaJIT executable</div>
++        <input v-model.trim="pobLuajit" placeholder="luajit" class="rounded bg-gray-900 px-1 block w-full mb-1" />
++      </div>
++    </div>
+     <ui-checkbox class="mb-4"
+       v-model="activateStockFilter">{{ t(':select_stock') }}</ui-checkbox>
+     <ui-checkbox class="mb-4"
+@@ -130,6 +143,18 @@ export default defineComponent({
+       accountName: configModelValue(() => props.config, 'accountName'),
+       showSeller: configModelValue(() => configWidget.value, 'showSeller'),
+       activateStockFilter: configModelValue(() => configWidget.value, 'activateStockFilter'),
++      pobLink: computed<string>({
++        get: () => configWidget.value.pobLink ?? '',
++        set: (value) => { configWidget.value.pobLink = value }
++      }),
++      pobPath: computed<string>({
++        get: () => configWidget.value.pobPath ?? '',
++        set: (value) => { configWidget.value.pobPath = value }
++      }),
++      pobLuajit: computed<string>({
++        get: () => configWidget.value.pobLuajit ?? '',
++        set: (value) => { configWidget.value.pobLuajit = value }
++      }),
+       showCursor: configModelValue(() => configWidget.value, 'showCursor'),
+       builtinBrowser: configModelValue(() => configWidget.value, 'builtinBrowser'),
+       requestPricePrediction: configModelValue(() => configWidget.value, 'requestPricePrediction'),
+diff --git a/main/src/pob/PobCalc.ts b/main/src/pob/PobCalc.ts
+new file mode 100644
+index 0000000..3b5eae7
+--- /dev/null
++++ b/main/src/pob/PobCalc.ts
+@@ -0,0 +1,201 @@
++import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
++import fs from 'node:fs'
++import path from 'node:path'
++import { app } from 'electron'
++import type { ServerEvents } from '../server'
++import type { Logger } from '../RemoteLogger'
++import type { PobCalcRequest } from '../../../ipc/types'
++// bundled as text by esbuild
++import bridgeSource from './apt-bridge.lua'
++
++const RESPONSE_PREFIX = '@@APT-POB@@'
++const LOAD_TIMEOUT = 120_000
++const COMPARE_TIMEOUT = 30_000
++
++type LoadRequest = Extract<PobCalcRequest, { cmd: 'load' }>
++
++interface Pending {
++  resolve: (result: unknown) => void
++  reject: (err: Error) => void
++  timer: NodeJS.Timeout
++}
++
++// Runs Path of Building headless (LuaJIT) and keeps it alive between checks,
++// loading a build takes a few seconds, comparing an item is fast.
++export class PobCalc {
++  private proc: ChildProcessWithoutNullStreams | null = null
++  private ready: Promise<void> | null = null
++  private stdoutBuffer = ''
++  private nextId = 1
++  private pending = new Map<number, Pending>()
++  private lastLoad: LoadRequest | null = null
++  private loaded = false
++  private queue = Promise.resolve()
++
++  constructor (
++    private server: ServerEvents,
++    private logger: Logger
++  ) {
++    server.onEventAnyClient('CLIENT->MAIN::pob-calc', (req) => {
++      // requests are serialized, PoB is single-threaded anyway
++      this.queue = this.queue.then(async () => {
++        try {
++          const result = await this.handle(req)
++          this.reply(req.id, { result })
++        } catch (e) {
++          this.reply(req.id, { error: (e as Error).message })
++        }
++      })
++    })
++    app.on('will-quit', () => { this.proc?.kill() })
++  }
++
++  private reply (id: number, payload: { result?: unknown, error?: string }) {
++    this.server.sendEventTo('broadcast', {
++      name: 'MAIN->CLIENT::pob-calc-result',
++      payload: { id, ...payload }
++    })
++  }
++
++  private async handle (req: PobCalcRequest): Promise<unknown> {
++    if (req.cmd === 'load') {
++      const sameEngine = this.lastLoad &&
++        this.lastLoad.luajit === req.luajit &&
++        this.lastLoad.pobPath === req.pobPath
++      if (!sameEngine) this.stop()
++      this.lastLoad = req
++      this.loaded = false
++      return await this.load()
++    }
++
++    if (!this.lastLoad) throw new Error('No build loaded')
++    if (!this.proc || !this.loaded) await this.load()
++    return await this.send({ cmd: 'compare', item: req.item, itemSet: req.itemSet }, COMPARE_TIMEOUT)
++  }
++
++  private async load () {
++    const req = this.lastLoad!
++    await this.start(req.luajit, req.pobPath)
++    const info = await this.send({ cmd: 'load', xml: req.xml }, LOAD_TIMEOUT)
++    this.loaded = true
++    return info
++  }
++
++  private start (luajit: string, pobPath: string): Promise<void> {
++    if (this.proc && this.ready) return this.ready
++
++    const srcDir = path.join(pobPath, 'src')
++    if (!fs.existsSync(path.join(srcDir, 'HeadlessWrapper.lua'))) {
++      return Promise.reject(new Error(`Path of Building not found in "${pobPath}"`))
++    }
++    const bridgePath = path.join(app.getPath('userData'), 'apt-pob-bridge.lua')
++    fs.writeFileSync(bridgePath, bridgeSource)
++
++    const runtimeDir = path.join(pobPath, 'runtime')
++    const proc = spawn(luajit || 'luajit', [bridgePath], {
++      cwd: srcDir,
++      env: {
++        ...process.env,
++        LUA_PATH: `${runtimeDir}/lua/?.lua;${runtimeDir}/lua/?/init.lua;;`,
++        LUA_CPATH: `${runtimeDir}/?.so;;`
++      }
++    })
++    this.proc = proc
++    this.stdoutBuffer = ''
++
++    this.ready = new Promise<void>((resolve, reject) => {
++      const timer = setTimeout(() => {
++        reject(new Error('Path of Building took too long to start'))
++        this.stop()
++      }, LOAD_TIMEOUT)
++      this.pending.set(0, {
++        resolve: () => { resolve() },
++        reject,
++        timer
++      })
++    })
++
++    let stderr = ''
++    proc.stderr.on('data', (chunk: Buffer) => {
++      stderr = (stderr + chunk.toString()).slice(-2000)
++    })
++    proc.stdout.on('data', (chunk: Buffer) => { this.onStdout(chunk.toString()) })
++    proc.on('error', (err) => {
++      this.logger.write(`error [pob-calc] ${err.message}`)
++      this.failAll(new Error(`Cannot start LuaJIT: ${err.message}`))
++      this.reset(proc)
++    })
++    proc.on('exit', (code) => {
++      if (this.proc !== proc) return
++      this.logger.write(`error [pob-calc] exited with code ${code}: ${stderr.trim()}`)
++      this.failAll(new Error(`Path of Building exited (code ${code}) ${stderr.trim().split('\n').pop() ?? ''}`))
++      this.reset(proc)
++    })
++
++    return this.ready
++  }
++
++  private onStdout (text: string) {
++    this.stdoutBuffer += text
++    let idx: number
++    while ((idx = this.stdoutBuffer.indexOf('\n')) !== -1) {
++      const line = this.stdoutBuffer.slice(0, idx)
++      this.stdoutBuffer = this.stdoutBuffer.slice(idx + 1)
++      if (!line.startsWith(RESPONSE_PREFIX)) continue
++
++      let msg: { id?: number, ready?: boolean, result?: unknown, error?: string }
++      try {
++        msg = JSON.parse(line.slice(RESPONSE_PREFIX.length))
++      } catch {
++        continue
++      }
++      const id = msg.ready ? 0 : msg.id
++      const pending = (id != null) ? this.pending.get(id) : undefined
++      if (!pending) continue
++      this.pending.delete(id!)
++      clearTimeout(pending.timer)
++      if (msg.error) {
++        pending.reject(new Error(msg.error))
++      } else {
++        pending.resolve(msg.result)
++      }
++    }
++  }
++
++  private send (payload: object, timeout: number): Promise<unknown> {
++    const proc = this.proc
++    if (!proc) return Promise.reject(new Error('Path of Building is not running'))
++    const id = this.nextId++
++    return new Promise((resolve, reject) => {
++      const timer = setTimeout(() => {
++        this.pending.delete(id)
++        reject(new Error('Path of Building did not respond in time'))
++      }, timeout)
++      this.pending.set(id, { resolve, reject, timer })
++      proc.stdin.write(JSON.stringify({ id, ...payload }) + '\n')
++    })
++  }
++
++  private failAll (err: Error) {
++    for (const pending of this.pending.values()) {
++      clearTimeout(pending.timer)
++      pending.reject(err)
++    }
++    this.pending.clear()
++  }
++
++  private reset (proc: ChildProcessWithoutNullStreams) {
++    if (this.proc !== proc) return
++    this.proc = null
++    this.ready = null
++    this.loaded = false
++  }
++
++  private stop () {
++    const proc = this.proc
++    if (!proc) return
++    this.reset(proc)
++    this.failAll(new Error('Path of Building was restarted'))
++    proc.kill()
++  }
++}
+diff --git a/main/src/pob/apt-bridge.lua b/main/src/pob/apt-bridge.lua
+new file mode 100644
+index 0000000..354bec0
+--- /dev/null
++++ b/main/src/pob/apt-bridge.lua
+@@ -0,0 +1,174 @@
++-- Awakened PoE Trade <-> Path of Building bridge.
++-- Must be started with the working directory set to PoB's "src" folder.
++-- Reads one JSON request per line on stdin, writes one JSON response per line
++-- on stdout, prefixed with RESPONSE_PREFIX (PoB itself prints to stdout too).
++
++local RESPONSE_PREFIX = "@@APT-POB@@"
++
++-- PoB's entry scripts start with a "#@" line meant for SimpleGraphic
++local function loadStripped (path)
++	local file = assert(io.open(path, "rb"))
++	local text = file:read("*a"):gsub("^\239\187\191", ""):gsub("^#[^\n]*", "")
++	file:close()
++	return assert(loadstring(text, "@" .. path))
++end
++local l_dofile = dofile
++function dofile (path)
++	if path:match("%.lua$") then
++		return loadStripped(path)()
++	end
++	return l_dofile(path)
++end
++
++local stdout = io.stdout
++local function noop () end
++print = noop
++
++loadStripped("HeadlessWrapper.lua")()
++ConPrintf = noop
++
++local dkjson = require("dkjson")
++
++local function respond (msg)
++	stdout:write(RESPONSE_PREFIX, dkjson.encode(msg), "\n")
++	stdout:flush()
++end
++
++-- copy of the local function in Modules/Build.lua
++local function matchFlags (reqFlags, notFlags, flags)
++	if type(reqFlags) == "string" then reqFlags = { reqFlags } end
++	if reqFlags then
++		for _, flag in ipairs(reqFlags) do
++			if not flags[flag] then return false end
++		end
++	end
++	if type(notFlags) == "string" then notFlags = { notFlags } end
++	if notFlags then
++		for _, flag in ipairs(notFlags) do
++			if flags[flag] then return false end
++		end
++	end
++	return true
++end
++
++local function collectStats (statList, actor, baseOutput, compareOutput, out, prefix)
++	if not statList or not baseOutput or not compareOutput then return end
++	for _, statData in ipairs(statList) do
++		if statData.stat and not statData.childStat and statData.stat ~= "SkillDPS" and
++			matchFlags(statData.flag, statData.notFlag, actor.mainSkill.skillFlags) then
++			local after = compareOutput[statData.stat] or 0
++			local before = baseOutput[statData.stat] or 0
++			if type(after) == "number" and type(before) == "number" then
++				local diff = after - before
++				if statData.stat == "FullDPS" and not compareOutput[statData.stat] then
++					diff = 0
++				end
++				if (diff > 0.001 or diff < -0.001) and
++					(not statData.condFunc or statData.condFunc(after, compareOutput) or statData.condFunc(before, baseOutput)) then
++					local scale = (statData.pc or statData.mod) and 100 or 1
++					table.insert(out, {
++						stat = statData.stat,
++						label = (prefix or "") .. statData.label,
++						before = before * scale,
++						after = after * scale,
++						diff = diff * scale,
++						fmt = statData.fmt,
++						lowerIsBetter = statData.lowerIsBetter or false,
++						percent = (statData.compPercent and before ~= 0 and after ~= 0) and (after / before * 100 - 100) or nil
++					})
++				end
++			end
++		end
++	end
++end
++
++local function selectItemSet (itemSetId)
++	local itemsTab = build.itemsTab
++	itemSetId = tonumber(itemSetId)
++	if itemSetId and itemsTab.itemSets[itemSetId] and itemsTab.activeItemSetId ~= itemSetId then
++		itemsTab:SetActiveItemSet(itemSetId)
++		runCallback("OnFrame")
++	end
++end
++
++local function compareItem (itemText, itemSetId)
++	local itemsTab = build.itemsTab
++	selectItemSet(itemSetId)
++	local item = new("Item"):Item(itemText)
++	if not item.base then
++		return { error = "Path of Building could not parse this item" }
++	end
++	item:NormaliseQuality()
++	item:BuildModList()
++
++	itemsTab:UpdateSockets()
++	local calcFunc, calcBase = build.calcsTab:GetMiscCalculator()
++	local env = build.calcsTab.mainEnv
++	local slots = { }
++	for slotName, slot in pairs(itemsTab.slots) do
++		if not slot.nodeId and itemsTab:IsItemValidForSlot(item, slotName) and not slot.inactive and
++			(not slot.weaponSet or slot.weaponSet == (itemsTab.activeItemSet.useSecondWeaponSet and 2 or 1)) and
++			slot.shown() then
++			local selItem = itemsTab.items[slot.selItemId]
++			local output = calcFunc({ repSlotName = slotName, repItem = item })
++			local stats = { }
++			if env.player.mainSkill.minion and calcBase.Minion and output.Minion then
++				collectStats(build.minionDisplayStats, env.minion, calcBase.Minion, output.Minion, stats, "Minion: ")
++			end
++			collectStats(build.displayStats, env.player, calcBase, output, stats)
++			table.insert(slots, {
++				slot = slotName,
++				label = slot.label or slotName,
++				replacing = selItem and selItem.name or nil,
++				stats = stats
++			})
++		end
++	end
++	table.sort(slots, function (a, b) return a.slot < b.slot end)
++	return { item = item.name, itemSet = tostring(itemsTab.activeItemSetId), slots = slots }
++end
++
++local function buildInfo ()
++	local mainSkill = build.calcsTab.mainEnv.player.mainSkill
++	local itemsTab = build.itemsTab
++	local itemSets = { }
++	for _, id in ipairs(itemsTab.itemSetOrderList) do
++		local set = itemsTab.itemSets[id]
++		table.insert(itemSets, { id = tostring(id), title = set.title or ("Item set " .. id) })
++	end
++	return {
++		itemSets = itemSets,
++		activeItemSet = tostring(itemsTab.activeItemSetId),
++		className = build.spec.curClassName,
++		ascendClassName = build.spec.curAscendClassName,
++		level = build.characterLevel,
++		mainSkill = mainSkill and mainSkill.activeEffect and mainSkill.activeEffect.grantedEffect.name or nil
++	}
++end
++
++respond({ ready = true })
++
++for line in io.stdin:lines() do
++	local req = dkjson.decode(line)
++	if type(req) == "table" then
++		local ok, result = pcall(function ()
++			if req.cmd == "load" then
++				loadBuildFromXML(req.xml, "APT")
++				if not build.calcsTab or not build.calcsTab.mainEnv then
++					error("Could not load the build")
++				end
++				return buildInfo()
++			elseif req.cmd == "compare" then
++				return compareItem(req.item, req.itemSet)
++			else
++				error("Unknown command: " .. tostring(req.cmd))
++			end
++		end)
++		if ok then
++			respond({ id = req.id, result = result })
++		else
++			respond({ id = req.id, error = tostring(result) })
++		end
++		collectgarbage("collect")
++	end
++end
+diff --git a/main/src/pob/lua.d.ts b/main/src/pob/lua.d.ts
+new file mode 100644
+index 0000000..913a394
+--- /dev/null
++++ b/main/src/pob/lua.d.ts
+@@ -0,0 +1,4 @@
++declare module '*.lua' {
++  const source: string
++  export default source
++}
+diff --git a/renderer/src/web/price-check/pob-compare/PobCompare.vue b/renderer/src/web/price-check/pob-compare/PobCompare.vue
+new file mode 100644
+index 0000000..6353761
+--- /dev/null
++++ b/renderer/src/web/price-check/pob-compare/PobCompare.vue
+@@ -0,0 +1,206 @@
++<template>
++  <div v-if="widget.pobLink && isComparable(item)" class="mb-4 border border-gray-700 rounded">
++    <button class="w-full flex items-center gap-x-2 bg-gray-900 px-2 py-1 rounded-t text-left"
++      @click="widget.pobCompareCollapsed = !widget.pobCompareCollapsed">
++      <i class="fas" :class="widget.pobCompareCollapsed ? 'fa-chevron-right' : 'fa-chevron-down'" />
++      <span class="flex-1 truncate">PoB Comparison</span>
++      <template v-if="headline.length">
++        <span v-for="stat of headline" :key="stat.stat" :class="diffClass(stat)">
++          {{ stat.short }} {{ signed(stat.percent ?? stat.diff, 1) }}{{ stat.percent != null ? '%' : '' }}
++        </span>
++      </template>
++      <i v-else-if="isBusy" class="fas fa-dna fa-spin" />
++    </button>
++    <div v-if="!widget.pobCompareCollapsed" class="p-2">
++      <div v-if="buildState?.loading" class="text-gray-500">Loading build…</div>
++      <div v-else-if="buildState?.error" class="text-red-400">
++        Could not load the build: {{ buildState.error }}
++        <button class="btn ml-2" @click="reloadBuild">Retry</button>
++      </div>
++      <template v-else-if="build">
++        <template v-if="usePobEngine && !engine?.error">
++          <div v-if="engine?.loading" class="text-gray-500">
++            <i class="fas fa-dna fa-spin" /> Starting Path of Building…
++          </div>
++          <template v-else-if="engine?.info">
++            <div class="flex flex-wrap gap-1 mb-2 text-sm">
++              <select v-if="engine.info.itemSets.length > 1" v-model="itemSetId"
++                class="rounded bg-gray-900 px-1 max-w-full truncate">
++                <option v-for="set of engine.info.itemSets" :key="set.id" :value="set.id">{{ set.title }}</option>
++              </select>
++              <button v-for="slot of calc?.slots ?? []" :key="slot.slot"
++                class="px-2 rounded" :class="slot.slot === selectedSlot?.slot ? 'bg-gray-600' : 'bg-gray-900'"
++                @click="selectedSlotName = slot.slot">{{ slot.label }}</button>
++            </div>
++            <div v-if="calcError" class="text-red-400">{{ calcError }}</div>
++            <div v-else-if="!calc" class="text-gray-500"><i class="fas fa-dna fa-spin" /> Calculating…</div>
++            <div v-else-if="!selectedSlot" class="text-gray-500">The build has no slot for this item.</div>
++            <template v-else>
++              <div class="text-gray-400 mb-2 truncate">
++                Replacing: <span class="text-gray-200">{{ selectedSlot.replacing ?? 'empty slot' }}</span>
++              </div>
++              <div v-if="!selectedSlot.stats.length" class="text-gray-500">No change to the build's stats.</div>
++              <table v-else class="w-full text-sm">
++                <tbody>
++                  <tr v-for="stat of selectedSlot.stats" :key="stat.stat + stat.label" :class="diffClass(stat)">
++                    <td class="pr-2 align-top">{{ stat.label }}</td>
++                    <td class="text-right align-top whitespace-nowrap font-poe text-gray-400">
++                      {{ formatStat(stat, stat.before) }} → {{ formatStat(stat, stat.after) }}
++                    </td>
++                    <td class="text-right align-top whitespace-nowrap font-poe pl-2">
++                      {{ formatStat(stat, stat.diff, true) }}
++                    </td>
++                    <td class="text-right align-top whitespace-nowrap font-poe pl-2 w-16">
++                      <template v-if="stat.percent != null">{{ signed(stat.percent, 1) }}%</template>
++                    </td>
++                  </tr>
++                </tbody>
++              </table>
++              <div class="text-gray-600 text-xs mt-2">
++                Calculated by Path of Building · {{ engine.info.ascendClassName || engine.info.className }}
++                lvl {{ engine.info.level }}<template v-if="engine.info.mainSkill"> · {{ engine.info.mainSkill }}</template>
++              </div>
++            </template>
++          </template>
++        </template>
++        <template v-else>
++          <div v-if="engine?.error" class="text-orange-400 text-sm mb-2">
++            <i class="fas fa-exclamation-triangle" /> Path of Building engine failed: {{ engine.error }}
++            <button class="btn ml-2" @click="restartEngine">Retry</button>
++          </div>
++          <div v-else class="text-gray-500 text-xs mb-2">
++            Set the Path of Building folder in settings to get DPS / EHP calculations.
++          </div>
++          <simple-compare :item="item" :build="build" />
++        </template>
++      </template>
++    </div>
++  </div>
++</template>
++
++<script setup lang="ts">
++import { computed, shallowRef, watch } from 'vue'
++import type { ParsedItem } from '@/parser'
++import { AppConfig } from '@/web/Config'
++import type { PriceCheckWidget } from '@/web/overlay/interfaces'
++import { usePobBuild } from './pob-build'
++import { usePobCalc, type PobCompareResult, type PobStatDiff } from './pob-calc'
++import { isComparable } from './compare'
++import SimpleCompare from './SimpleCompare.vue'
++
++const props = defineProps<{
++  item: ParsedItem
++}>()
++
++const widget = computed(() => AppConfig<PriceCheckWidget>('price-check')!)
++const { state: buildState, load: loadBuild } = usePobBuild()
++const { engine, ensureLoaded, compare } = usePobCalc()
++
++const build = computed(() => buildState.value?.build)
++const usePobEngine = computed(() => Boolean(widget.value.pobPath))
++
++watch(() => widget.value.pobLink, (link) => {
++  if (link) loadBuild(link)
++}, { immediate: true })
++
++function reloadBuild () {
++  if (widget.value.pobLink) loadBuild(widget.value.pobLink, true)
++}
++
++watch(() => [build.value, widget.value.pobPath, widget.value.pobLuajit] as const, ([build, pobPath, luajit]) => {
++  if (build && pobPath) ensureLoaded(build.xml, luajit || 'luajit', pobPath)
++}, { immediate: true })
++
++function restartEngine () {
++  if (build.value && widget.value.pobPath) {
++    ensureLoaded(build.value.xml, widget.value.pobLuajit || 'luajit', widget.value.pobPath, true)
++  }
++}
++
++const itemSetId = computed<string>({
++  get () {
++    const info = engine.value?.info
++    const saved = widget.value.pobItemSet
++    return (saved && info?.itemSets.some(set => set.id === saved))
++      ? saved
++      : info?.activeItemSet ?? ''
++  },
++  set (value) { widget.value.pobItemSet = value }
++})
++
++const calc = shallowRef<PobCompareResult | null>(null)
++const calcError = shallowRef<string | null>(null)
++let calcToken = 0
++
++watch(() => [props.item, engine.value?.info, itemSetId.value] as const, async ([item, info, itemSet]) => {
++  calc.value = null
++  calcError.value = null
++  if (!info || !isComparable(item)) return
++  const token = ++calcToken
++  try {
++    const result = await compare(item.rawText, itemSet)
++    if (token === calcToken) calc.value = result
++  } catch (e) {
++    if (token === calcToken) calcError.value = (e as Error).message
++  }
++}, { immediate: true })
++
++const selectedSlotName = shallowRef('')
++const selectedSlot = computed(() => {
++  const slots = calc.value?.slots ?? []
++  return slots.find(slot => slot.slot === selectedSlotName.value) ?? slots[0]
++})
++
++const HEADLINE = [
++  // most inclusive damage stat first, "average" skills (e.g. Explosive Arrow) don't have DPS
++  {
++    short: 'DPS',
++    stats: [
++      'FullDPS', 'CombinedDPS', 'CombinedAvg',
++      'WithIgniteDPS', 'WithPoisonDPS', 'WithBleedDPS', 'WithImpaleDPS',
++      'TotalDotDPS', 'TotalDPS', 'AverageDamage', 'TotalDot', 'IgniteDPS'
++    ]
++  },
++  { short: 'EHP', stats: ['TotalEHP'] }
++]
++const headline = computed(() => {
++  const stats = selectedSlot.value?.stats ?? []
++  const out: Array<PobStatDiff & { short: string }> = []
++  for (const entry of HEADLINE) {
++    const found = entry.stats.map(name => stats.find(s => s.stat === name)).find(Boolean)
++    if (found) out.push({ ...found, short: entry.short })
++  }
++  return out
++})
++
++const isBusy = computed(() =>
++  buildState.value?.loading || engine.value?.loading ||
++  (engine.value?.info && !calc.value && !calcError.value))
++
++function isImprovement (stat: PobStatDiff) {
++  return (stat.diff > 0) !== stat.lowerIsBetter
++}
++
++function diffClass (stat: PobStatDiff) {
++  return isImprovement(stat) ? 'text-green-400' : 'text-red-400'
++}
++
++function decimalsOf (fmt: string) {
++  const match = fmt.match(/\.(\d)f/)
++  return match ? Number(match[1]) : 0
++}
++
++function signed (value: number, decimals: number) {
++  const str = value.toLocaleString('en-US', { maximumFractionDigits: decimals })
++  return value > 0 ? `+${str}` : str
++}
++
++function formatStat (stat: PobStatDiff, value: number, withSign = false) {
++  const decimals = decimalsOf(stat.fmt)
++  const suffix = stat.fmt.includes('%') ? '%' : ''
++  const str = withSign
++    ? signed(value, decimals)
++    : value.toLocaleString('en-US', { maximumFractionDigits: decimals })
++  return str + suffix
++}
++</script>
+diff --git a/renderer/src/web/price-check/pob-compare/SimpleCompare.vue b/renderer/src/web/price-check/pob-compare/SimpleCompare.vue
+new file mode 100644
+index 0000000..7bdd7fd
+--- /dev/null
++++ b/renderer/src/web/price-check/pob-compare/SimpleCompare.vue
+@@ -0,0 +1,112 @@
++<template>
++  <div>
++    <div class="flex flex-wrap gap-1 mb-2 text-sm">
++      <select v-if="build.itemSets.length > 1" v-model="itemSetId"
++        class="rounded bg-gray-900 px-1 max-w-full truncate">
++        <option v-for="set of build.itemSets" :key="set.id" :value="set.id">{{ set.title }}</option>
++      </select>
++      <button v-for="slot of slots" :key="slot"
++        class="px-2 rounded" :class="slot === selectedSlot ? 'bg-gray-600' : 'bg-gray-900'"
++        @click="selectedSlot = slot">{{ slot }}</button>
++    </div>
++    <div v-if="itemSetId !== build.activeItemSet" class="text-orange-400 text-sm mb-2">
++      <i class="fas fa-exclamation-triangle" /> Build totals (resistances, attributes, life) come from
++      the active set "{{ activeSetTitle }}", not this one.
++    </div>
++    <div class="text-gray-400 mb-2 truncate">
++      Equipped: <span class="text-gray-200">{{ equipped ? (equipped.name || equipped.baseType) : 'nothing' }}</span>
++    </div>
++    <div v-if="result && !result.rows.length" class="text-gray-500">No stat difference found.</div>
++    <table v-else-if="result" class="w-full text-sm">
++      <tbody>
++        <tr v-for="(row, idx) of result.rows" :key="idx" :class="verdictClass(row.verdict)">
++          <td class="pr-1 align-top w-4"><i class="fas" :class="verdictIcon(row.verdict)" /></td>
++          <td class="pr-2 align-top">
++            {{ row.label }}
++            <div v-if="row.note" class="text-gray-500 text-xs">{{ row.note }}</div>
++          </td>
++          <td class="text-right align-top whitespace-nowrap font-poe">
++            {{ fmt(row.before) }} → {{ fmt(row.after) }}
++            <span class="ml-1">({{ row.delta > 0 ? '+' : '' }}{{ fmt(row.delta) }})</span>
++          </td>
++        </tr>
++      </tbody>
++    </table>
++    <div v-if="result?.unknownPobLines.length" class="text-gray-500 text-xs mt-2"
++      :title="result.unknownPobLines.join('\n')">
++      {{ result.unknownPobLines.length }} unrecognized line(s) on the PoB item, ignored.
++    </div>
++    <div class="text-gray-600 text-xs mt-1">
++      Estimate based on item mods only (no DPS/EHP, no % increased from the tree).
++    </div>
++  </div>
++</template>
++
++<script setup lang="ts">
++import { computed, shallowRef, watch } from 'vue'
++import type { ParsedItem } from '@/parser'
++import { AppConfig } from '@/web/Config'
++import type { PriceCheckWidget } from '@/web/overlay/interfaces'
++import type { PobBuild } from './pob-build'
++import { compareWithBuild, slotsForCategory, type Verdict } from './compare'
++
++const props = defineProps<{
++  item: ParsedItem
++  build: PobBuild
++}>()
++
++const widget = computed(() => AppConfig<PriceCheckWidget>('price-check')!)
++
++const itemSetId = computed<string>({
++  get () {
++    const saved = widget.value.pobItemSet
++    return (saved && props.build.itemSets.some(set => set.id === saved))
++      ? saved
++      : props.build.activeItemSet
++  },
++  set (value) { widget.value.pobItemSet = value }
++})
++const itemSet = computed(() => props.build.itemSets.find(set => set.id === itemSetId.value))
++const activeSetTitle = computed(() =>
++  props.build.itemSets.find(set => set.id === props.build.activeItemSet)?.title)
++
++const slots = computed(() => {
++  const all = slotsForCategory(props.item.category)
++  if (!itemSet.value) return all
++  // hide extra slots (e.g. Ring 3) that the build doesn't use
++  const used = all.filter(slot => itemSet.value!.slots.has(slot))
++  return used.length ? used : all.slice(0, 1)
++})
++
++const selectedSlot = shallowRef('')
++watch(slots, (list) => {
++  if (!list.includes(selectedSlot.value)) selectedSlot.value = list[0] ?? ''
++}, { immediate: true })
++
++const equipped = computed(() => itemSet.value?.slots.get(selectedSlot.value))
++
++const result = computed(() => {
++  if (!selectedSlot.value) return null
++  return compareWithBuild(props.item, equipped.value, props.build)
++})
++
++function fmt (n: number) {
++  return String(Math.round(n * 10) / 10)
++}
++
++function verdictClass (verdict: Verdict) {
++  return {
++    'text-green-400': verdict === 'good',
++    'text-red-400': verdict === 'bad',
++    'text-gray-400': verdict === 'neutral'
++  }
++}
++
++function verdictIcon (verdict: Verdict) {
++  switch (verdict) {
++    case 'good': return 'fa-check'
++    case 'bad': return 'fa-times'
++    default: return 'fa-minus'
++  }
++}
++</script>
+diff --git a/renderer/src/web/price-check/pob-compare/compare.ts b/renderer/src/web/price-check/pob-compare/compare.ts
+new file mode 100644
+index 0000000..d8b50a7
+--- /dev/null
++++ b/renderer/src/web/price-check/pob-compare/compare.ts
+@@ -0,0 +1,297 @@
++import { StatBetter } from '@/assets/data'
++import type { Stat } from '@/assets/data'
++import { ItemCategory, type ParsedItem } from '@/parser'
++import { ARMOUR, WEAPON } from '@/parser/meta'
++import { ModifierType, sumStatsByModType, type StatCalculated } from '@/parser/modifiers'
++import type { ParsedModifier } from '@/parser/advanced-mod-desc'
++import { linesToStatStrings, tryParseTranslation } from '@/parser/stat-translations'
++import type { PobBuild, PobItem } from './pob-build'
++
++export type Verdict = 'good' | 'bad' | 'neutral'
++
++export interface CompareRow {
++  group: 'defence' | 'resistance' | 'attribute' | 'other'
++  label: string
++  before: number
++  after: number
++  delta: number
++  verdict: Verdict
++  note?: string
++}
++
++export interface CompareResult {
++  rows: CompareRow[]
++  unknownPobLines: string[]
++  good: number
++  bad: number
++}
++
++export function slotsForCategory (category: ItemCategory | undefined): string[] {
++  switch (category) {
++    case ItemCategory.Helmet: return ['Helmet']
++    case ItemCategory.BodyArmour: return ['Body Armour']
++    case ItemCategory.Gloves: return ['Gloves']
++    case ItemCategory.Boots: return ['Boots']
++    case ItemCategory.Belt: return ['Belt']
++    case ItemCategory.Amulet: return ['Amulet']
++    case ItemCategory.Ring: return ['Ring 1', 'Ring 2', 'Ring 3']
++    case ItemCategory.Flask: return ['Flask 1', 'Flask 2', 'Flask 3', 'Flask 4', 'Flask 5']
++    case ItemCategory.Shield:
++    case ItemCategory.Quiver: return ['Weapon 2']
++  }
++  if (category && WEAPON.has(category)) return ['Weapon 1', 'Weapon 2']
++  return []
++}
++
++// Mod type is only used to pick a stat that exists on trade,
++// PoB doesn't tell us much more than "crafted" anyway.
++const MOD_TYPES_TO_TRY = [
++  ModifierType.Explicit,
++  ModifierType.Crafted,
++  ModifierType.Implicit,
++  ModifierType.Enchant,
++  ModifierType.Fractured
++]
++
++function parsePobLines (
++  lines: string[],
++  preferred: ModifierType,
++  category: ItemCategory | undefined,
++  unknown: string[]
++): ParsedModifier {
++  const modifier: ParsedModifier = { info: { type: preferred, tags: [] }, stats: [] }
++  const statIterator = linesToStatStrings(lines)
++  let stat = statIterator.next()
++  while (!stat.done) {
++    let parsed
++    for (const modType of [preferred, ...MOD_TYPES_TO_TRY]) {
++      parsed = tryParseTranslation(stat.value, modType, category)
++      if (parsed) break
++    }
++    if (parsed) {
++      modifier.stats.push(parsed)
++      stat = statIterator.next(true)
++    } else {
++      stat = statIterator.next(false)
++    }
++  }
++  unknown.push(...stat.value)
++  return modifier
++}
++
++interface StatTotal { stat: Stat, value: number }
++
++function totalsFromCalculated (calculated: StatCalculated[]): Map<string, StatTotal> {
++  const out = new Map<string, StatTotal>()
++  for (const calc of calculated) {
++    if (calc.type === ModifierType.Pseudo) continue
++    const value = calc.sources.reduce((sum, source) =>
++      sum + (source.contributes?.value ?? 1), 0)
++    const prev = out.get(calc.stat.ref)
++    out.set(calc.stat.ref, { stat: calc.stat, value: (prev?.value ?? 0) + value })
++  }
++  return out
++}
++
++export function pobItemTotals (item: PobItem | undefined, category: ItemCategory | undefined) {
++  const unknown: string[] = []
++  if (!item) return { totals: new Map<string, StatTotal>(), unknown }
++  const mods = [
++    parsePobLines(item.implicits, ModifierType.Implicit, category, unknown),
++    parsePobLines(item.explicits, ModifierType.Explicit, category, unknown)
++  ]
++  return { totals: totalsFromCalculated(sumStatsByModType(mods)), unknown }
++}
++
++export function parsedItemTotals (item: ParsedItem) {
++  return totalsFromCalculated(item.statsByType)
++}
++
++const RESISTANCES = [
++  { key: 'Fire', label: 'Fire Resistance' },
++  { key: 'Cold', label: 'Cold Resistance' },
++  { key: 'Lightning', label: 'Lightning Resistance' },
++  { key: 'Chaos', label: 'Chaos Resistance' }
++] as const
++
++const RESISTANCE_STATS: Array<{ ref: string, elements: string[] }> = [
++  { ref: '+#% to All Resistances', elements: ['Fire', 'Cold', 'Lightning', 'Chaos'] },
++  { ref: '+#% to all Elemental Resistances', elements: ['Fire', 'Cold', 'Lightning'] },
++  { ref: '+#% to Fire Resistance', elements: ['Fire'] },
++  { ref: '+#% to Cold Resistance', elements: ['Cold'] },
++  { ref: '+#% to Lightning Resistance', elements: ['Lightning'] },
++  { ref: '+#% to Chaos Resistance', elements: ['Chaos'] },
++  { ref: '+#% to Fire and Lightning Resistances', elements: ['Fire', 'Lightning'] },
++  { ref: '+#% to Fire and Cold Resistances', elements: ['Fire', 'Cold'] },
++  { ref: '+#% to Cold and Lightning Resistances', elements: ['Cold', 'Lightning'] },
++  { ref: '+#% to Fire and Chaos Resistances', elements: ['Fire', 'Chaos'] },
++  { ref: '+#% to Cold and Chaos Resistances', elements: ['Cold', 'Chaos'] },
++  { ref: '+#% to Lightning and Chaos Resistances', elements: ['Lightning', 'Chaos'] }
++]
++
++const ATTRIBUTES = [
++  { key: 'Str', label: 'Strength' },
++  { key: 'Dex', label: 'Dexterity' },
++  { key: 'Int', label: 'Intelligence' }
++] as const
++
++const ATTRIBUTE_STATS: Array<{ ref: string, attributes: string[] }> = [
++  { ref: '+# to all Attributes', attributes: ['Str', 'Dex', 'Int'] },
++  { ref: '+# to Strength', attributes: ['Str'] },
++  { ref: '+# to Dexterity', attributes: ['Dex'] },
++  { ref: '+# to Intelligence', attributes: ['Int'] },
++  { ref: '+# to Strength and Intelligence', attributes: ['Str', 'Int'] },
++  { ref: '+# to Strength and Dexterity', attributes: ['Str', 'Dex'] },
++  { ref: '+# to Dexterity and Intelligence', attributes: ['Dex', 'Int'] }
++]
++
++const LIFE_REF = '+# to maximum Life'
++const MANA_REF = '+# to maximum Mana'
++
++const fmt = (n: number) => String(Math.round(n * 10) / 10)
++
++export function compareWithBuild (
++  newItem: ParsedItem,
++  equipped: PobItem | undefined,
++  build: PobBuild
++): CompareResult {
++  const after = parsedItemTotals(newItem)
++  const { totals: before, unknown } = pobItemTotals(equipped, newItem.category)
++  const delta = (ref: string) => (after.get(ref)?.value ?? 0) - (before.get(ref)?.value ?? 0)
++  const pobStat = (name: string) => build.stats.get(name) ?? 0
++  const consumed = new Set<string>([LIFE_REF, MANA_REF])
++  const rows: CompareRow[] = []
++
++  const attrDelta = (key: string) => ATTRIBUTE_STATS
++    .filter(info => info.attributes.includes(key))
++    .reduce((sum, info) => { consumed.add(info.ref); return sum + delta(info.ref) }, 0)
++  const strDelta = attrDelta('Str')
++  const dexDelta = attrDelta('Dex')
++  const intDelta = attrDelta('Int')
++
++  // Flat values only, the build's "% increased" from the tree is unknown here
++  const lifeDelta = delta(LIFE_REF) + Math.floor(strDelta / 2)
++  if (lifeDelta !== 0) {
++    const life = pobStat('Life')
++    rows.push({
++      group: 'defence',
++      label: 'Flat Life',
++      before: life,
++      after: life + lifeDelta,
++      delta: lifeDelta,
++      verdict: lifeDelta > 0 ? 'good' : 'bad',
++      note: life ? `${lifeDelta > 0 ? '+' : ''}${fmt(lifeDelta / life * 100)}% of your Life, before % increased` : undefined
++    })
++  }
++  const manaDelta = delta(MANA_REF) + Math.floor(intDelta / 2)
++  if (manaDelta !== 0) {
++    const mana = pobStat('Mana')
++    rows.push({
++      group: 'defence',
++      label: 'Flat Mana',
++      before: mana,
++      after: mana + manaDelta,
++      delta: manaDelta,
++      verdict: manaDelta > 0 ? 'good' : 'bad'
++    })
++  }
++
++  for (const res of RESISTANCES) {
++    const resDelta = RESISTANCE_STATS
++      .filter(info => info.elements.includes(res.key))
++      .reduce((sum, info) => { consumed.add(info.ref); return sum + delta(info.ref) }, 0)
++    if (resDelta === 0) continue
++
++    const capped = pobStat(`${res.key}Resist`)
++    const overCap = pobStat(`${res.key}ResistOverCap`)
++    const max = overCap > 0 ? capped : Math.max(75, capped)
++    const uncappedBefore = capped + overCap
++    const uncappedAfter = uncappedBefore + resDelta
++    const cappedAfter = Math.min(max, uncappedAfter)
++    const effective = cappedAfter - capped
++
++    let verdict: Verdict
++    let note: string
++    if (effective > 0) {
++      verdict = 'good'
++      note = cappedAfter >= max
++        ? `reaches the cap (${max}%)`
++        : `still ${fmt(max - cappedAfter)}% below the cap`
++    } else if (effective < 0) {
++      verdict = 'bad'
++      note = `${fmt(max - cappedAfter)}% below the cap (${max}%)`
++    } else if (resDelta > 0) {
++      verdict = 'neutral'
++      note = `already capped, overcap ${fmt(overCap)} → ${fmt(uncappedAfter - max)}%`
++    } else {
++      verdict = 'neutral'
++      note = `loss absorbed by overcap (${fmt(uncappedAfter - max)}% left)`
++    }
++    rows.push({
++      group: 'resistance',
++      label: res.label,
++      before: capped,
++      after: cappedAfter,
++      delta: resDelta,
++      verdict,
++      note
++    })
++  }
++
++  const attrDeltas: Record<string, number> = { Str: strDelta, Dex: dexDelta, Int: intDelta }
++  for (const attr of ATTRIBUTES) {
++    const d = attrDeltas[attr.key]
++    if (d === 0) continue
++    const value = pobStat(attr.key)
++    const req = pobStat(`Req${attr.key}`)
++    const next = value + d
++
++    let verdict: Verdict
++    let note: string
++    if (d < 0 && next < req) {
++      verdict = 'bad'
++      note = value >= req
++        ? `drops below requirement (${req})`
++        : `already below requirement (${req}), ${fmt(req - next)} missing`
++    } else if (d > 0 && value < req) {
++      verdict = 'good'
++      note = next >= req
++        ? `meets requirement (${req})`
++        : `helps with requirement (${req}), ${fmt(req - next)} still missing`
++    } else {
++      verdict = 'neutral'
++      note = `requirement (${req}) already met`
++    }
++    rows.push({ group: 'attribute', label: attr.label, before: value, after: next, delta: d, verdict, note })
++  }
++
++  for (const ref of new Set([...before.keys(), ...after.keys()])) {
++    if (consumed.has(ref)) continue
++    const d = delta(ref)
++    if (d === 0) continue
++    const stat = (after.get(ref) ?? before.get(ref))!.stat
++    let verdict: Verdict = 'neutral'
++    if (stat.better === StatBetter.PositiveRoll) verdict = d > 0 ? 'good' : 'bad'
++    if (stat.better === StatBetter.NegativeRoll) verdict = d < 0 ? 'good' : 'bad'
++    rows.push({
++      group: 'other',
++      label: ref,
++      before: before.get(ref)?.value ?? 0,
++      after: after.get(ref)?.value ?? 0,
++      delta: d,
++      verdict
++    })
++  }
++
++  return {
++    rows,
++    unknownPobLines: unknown,
++    good: rows.filter(row => row.verdict === 'good').length,
++    bad: rows.filter(row => row.verdict === 'bad').length
++  }
++}
++
++export function isComparable (item: ParsedItem) {
++  return item.category != null &&
++    (ARMOUR.has(item.category) || WEAPON.has(item.category) || slotsForCategory(item.category).length > 0)
++}
+diff --git a/renderer/src/web/price-check/pob-compare/pob-build.ts b/renderer/src/web/price-check/pob-compare/pob-build.ts
+new file mode 100644
+index 0000000..7f43a0a
+--- /dev/null
++++ b/renderer/src/web/price-check/pob-compare/pob-build.ts
+@@ -0,0 +1,212 @@
++import { shallowRef } from 'vue'
++import { Host } from '@/web/background/IPC'
++
++export interface PobItem {
++  id: string
++  rarity: string
++  name: string
++  baseType: string
++  implicits: string[]
++  explicits: string[]
++}
++
++export interface PobItemSet {
++  id: string
++  title: string
++  slots: Map<string, PobItem>
++}
++
++export interface PobBuild {
++  xml: string
++  className: string
++  ascendClassName: string
++  level: number
++  mainSkill?: string
++  stats: Map<string, number>
++  itemSets: PobItemSet[]
++  activeItemSet: string
++}
++
++export function extractBuildCode (link: string): { url?: string, code?: string } {
++  link = link.trim()
++  const pobbin = link.match(/^(?:https?:\/\/)?pobb\.in\/(?:u\/[^/]+\/)?([\w-]+)\/?(?:raw)?$/)
++  if (pobbin) return { url: `pobb.in/${pobbin[1]}/raw` }
++  const pastebin = link.match(/^(?:https?:\/\/)?pastebin\.com\/(?:raw\/)?(\w+)\/?$/)
++  if (pastebin) return { url: `pastebin.com/raw/${pastebin[1]}` }
++  if (/^[\w=-]{50,}$/.test(link)) return { code: link }
++  return {}
++}
++
++async function decodeBuildCode (code: string): Promise<string> {
++  const b64 = code.trim().replace(/-/g, '+').replace(/_/g, '/')
++  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
++  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'))
++  return await new Response(stream).text()
++}
++
++function parseItemText (id: string, text: string): PobItem {
++  const lines = text.split('\n').map(line => line.trim()).filter(line => line.length)
++  const rarity = (lines.shift() ?? '').replace(/^Rarity:\s*/, '').toUpperCase()
++  const name = lines.shift() ?? ''
++  const baseType = (rarity === 'RARE' || rarity === 'UNIQUE' || rarity === 'RELIC')
++    ? (lines.shift() ?? '')
++    : name
++
++  let selectedVariant: number | undefined
++  let selectedAltVariant: number | undefined
++  let implicitsCount = 0
++  let idx = 0
++  for (; idx < lines.length; idx += 1) {
++    const line = lines[idx]
++    const prop = line.match(/^([\w ]+):\s*(.*)$/)
++    if (!prop) break
++    if (prop[1] === 'Selected Variant') selectedVariant = Number(prop[2])
++    if (prop[1] === 'Selected Alt Variant') selectedAltVariant = Number(prop[2])
++    if (prop[1] === 'Implicits') {
++      implicitsCount = Number(prop[2])
++      idx += 1
++      break
++    }
++  }
++
++  const mods: string[] = []
++  for (const line of lines.slice(idx)) {
++    let range = 0.5
++    let keep = true
++    const stripped = line.replace(/\{([^}]*)\}/g, (_, tag: string) => {
++      const [key, value] = tag.split(':')
++      if (key === 'range') range = Number(value)
++      if (key === 'variant' && selectedVariant !== undefined) {
++        const variants = value.split(',').map(Number)
++        keep = variants.includes(selectedVariant) ||
++          (selectedAltVariant !== undefined && variants.includes(selectedAltVariant))
++      }
++      return ''
++    })
++    if (!keep) continue
++    mods.push(resolveRanges(stripped, range))
++  }
++
++  return {
++    id,
++    rarity,
++    name,
++    baseType,
++    implicits: mods.slice(0, implicitsCount),
++    explicits: mods.slice(implicitsCount)
++  }
++}
++
++// "+(30-50) to maximum Mana" with range 0.5 -> "+40 to maximum Mana"
++function resolveRanges (line: string, range: number): string {
++  return line.replace(/\((-?\d+(?:\.\d+)?)-(-?\d+(?:\.\d+)?)\)/g, (_, minStr: string, maxStr: string) => {
++    const min = Number(minStr)
++    const max = Number(maxStr)
++    const value = min + (max - min) * range
++    const decimals = Math.max(
++      minStr.split('.')[1]?.length ?? 0,
++      maxStr.split('.')[1]?.length ?? 0)
++    return decimals
++      ? value.toFixed(decimals)
++      : String(Math.round(value))
++  })
++}
++
++function parseBuildXml (xml: string): PobBuild {
++  const doc = new DOMParser().parseFromString(xml, 'text/xml')
++  const buildEl = doc.querySelector('PathOfBuilding > Build')
++  if (!buildEl) throw new Error('Not a Path of Building export')
++
++  const stats = new Map<string, number>()
++  for (const el of buildEl.querySelectorAll('PlayerStat')) {
++    stats.set(el.getAttribute('stat')!, Number(el.getAttribute('value')))
++  }
++
++  const items = new Map<string, PobItem>()
++  for (const el of doc.querySelectorAll('Items > Item')) {
++    const id = el.getAttribute('id')!
++    // text content also includes <ModRange> children, which have no text
++    items.set(id, parseItemText(id, el.textContent ?? ''))
++  }
++
++  const itemsEl = doc.querySelector('Items')
++  const readSlots = (parent: Element) => {
++    const slots = new Map<string, PobItem>()
++    for (const slot of parent.querySelectorAll(':scope > Slot')) {
++      const item = items.get(slot.getAttribute('itemId') ?? '0')
++      if (item) slots.set(slot.getAttribute('name')!, item)
++    }
++    return slots
++  }
++
++  const itemSets: PobItemSet[] = []
++  for (const el of doc.querySelectorAll('Items > ItemSet')) {
++    itemSets.push({
++      id: el.getAttribute('id')!,
++      title: el.getAttribute('title') || `Item set ${el.getAttribute('id')}`,
++      slots: readSlots(el)
++    })
++  }
++  if (!itemSets.length && itemsEl) {
++    // older exports keep slots directly under <Items>
++    itemSets.push({ id: '1', title: 'Default', slots: readSlots(itemsEl) })
++  }
++
++  const mainGroupIdx = Number(buildEl.getAttribute('mainSocketGroup') ?? 1) - 1
++  const skillsEl = doc.querySelector('Skills')
++  const skillSetEl = skillsEl?.querySelector(`:scope > SkillSet[id="${skillsEl.getAttribute('activeSkillSet')}"]`) ??
++    skillsEl?.querySelector(':scope > SkillSet') ??
++    skillsEl
++  const mainGroup = skillSetEl?.querySelectorAll(':scope > Skill')[mainGroupIdx]
++  const mainSkill = mainGroup?.querySelector('Gem')?.getAttribute('nameSpec') ?? undefined
++
++  return {
++    xml,
++    className: buildEl.getAttribute('className') ?? '',
++    ascendClassName: buildEl.getAttribute('ascendClassName') ?? '',
++    level: Number(buildEl.getAttribute('level') ?? 0),
++    mainSkill,
++    stats,
++    itemSets,
++    activeItemSet: itemsEl?.getAttribute('activeItemSet') ?? itemSets[0]?.id ?? '1'
++  }
++}
++
++const cache = shallowRef<{
++  link: string
++  build?: PobBuild
++  error?: string
++  loading: boolean
++} | null>(null)
++
++export function usePobBuild () {
++  async function load (link: string, force = false) {
++    if (!force && cache.value?.link === link && !cache.value.error) return
++    if (!link.trim()) {
++      cache.value = null
++      return
++    }
++
++    cache.value = { link, loading: true }
++    try {
++      const source = extractBuildCode(link)
++      let code = source.code
++      if (source.url) {
++        const response = await Host.proxy(source.url)
++        if (!response.ok) throw new Error(`HTTP ${response.status}`)
++        code = await response.text()
++      }
++      if (!code) throw new Error('Unrecognized link (expected pobb.in, pastebin or a PoB code)')
++      const build = parseBuildXml(await decodeBuildCode(code))
++      if (cache.value?.link === link) {
++        cache.value = { link, build, loading: false }
++      }
++    } catch (e) {
++      if (cache.value?.link === link) {
++        cache.value = { link, error: (e as Error).message, loading: false }
++      }
++    }
++  }
++
++  return { state: cache, load }
++}
+diff --git a/renderer/src/web/price-check/pob-compare/pob-calc.ts b/renderer/src/web/price-check/pob-compare/pob-calc.ts
+new file mode 100644
+index 0000000..b8958b4
+--- /dev/null
++++ b/renderer/src/web/price-check/pob-compare/pob-calc.ts
+@@ -0,0 +1,101 @@
++import { shallowRef } from 'vue'
++import type { PobCalcRequest } from '@ipc/types'
++import { Host } from '@/web/background/IPC'
++
++export interface PobStatDiff {
++  stat: string
++  label: string
++  before: number
++  after: number
++  diff: number
++  fmt: string
++  lowerIsBetter: boolean
++  percent?: number
++}
++
++export interface PobSlotCompare {
++  slot: string
++  label: string
++  replacing?: string
++  stats: PobStatDiff[]
++}
++
++export interface PobCompareResult {
++  item: string
++  itemSet: string
++  slots: PobSlotCompare[]
++}
++
++export interface PobEngineInfo {
++  className: string
++  ascendClassName: string
++  level: number
++  mainSkill?: string
++  itemSets: Array<{ id: string, title: string }>
++  activeItemSet: string
++}
++
++type RequestWithoutId = PobCalcRequest extends infer R
++  ? R extends PobCalcRequest ? Omit<R, 'id'> : never
++  : never
++
++// other clients (e.g. browser tab) also receive broadcasted results
++let nextId = Math.floor(Math.random() * 1e9)
++const pending = new Map<number, { resolve: (v: unknown) => void, reject: (e: Error) => void }>()
++
++Host.onEvent('MAIN->CLIENT::pob-calc-result', (e) => {
++  const req = pending.get(e.id)
++  if (!req) return
++  pending.delete(e.id)
++  if (e.error) {
++    req.reject(new Error(e.error))
++  } else {
++    req.resolve(e.result)
++  }
++})
++
++function request<T> (req: RequestWithoutId): Promise<T> {
++  const id = nextId++
++  return new Promise<T>((resolve, reject) => {
++    pending.set(id, { resolve: resolve as (v: unknown) => void, reject })
++    Host.sendEvent({ name: 'CLIENT->MAIN::pob-calc', payload: { ...req, id } as PobCalcRequest })
++  })
++}
++
++const engine = shallowRef<{
++  key: string
++  loading: boolean
++  info?: PobEngineInfo
++  error?: string
++} | null>(null)
++
++let loadPromise: Promise<void> | null = null
++
++export function usePobCalc () {
++  async function ensureLoaded (xml: string, luajit: string, pobPath: string, force = false) {
++    const key = `${luajit}\n${pobPath}\n${xml.length}:${xml.slice(-200)}`
++    if (!force && engine.value?.key === key && !engine.value.error) {
++      return await loadPromise
++    }
++    engine.value = { key, loading: true }
++    loadPromise = request<PobEngineInfo>({ cmd: 'load', xml, luajit, pobPath })
++      .then(info => {
++        if (engine.value?.key === key) engine.value = { key, loading: false, info }
++      }, (e: Error) => {
++        if (engine.value?.key === key) engine.value = { key, loading: false, error: e.message }
++      })
++    return await loadPromise
++  }
++
++  async function compare (itemText: string, itemSet?: string) {
++    const result = await request<PobCompareResult>({ cmd: 'compare', item: itemText, itemSet })
++    // Lua encodes empty tables as objects
++    const slots = Array.isArray(result.slots) ? result.slots : []
++    for (const slot of slots) {
++      if (!Array.isArray(slot.stats)) slot.stats = []
++    }
++    return { ...result, slots }
++  }
++
++  return { engine, ensureLoaded, compare }
++}
