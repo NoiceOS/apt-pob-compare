@@ -55,6 +55,21 @@ index 40efa38..911fe5a 100644
    define: {
      'process.env.STATIC': (isDev) ? '"../build/icons"' : '"."',
      'process.env.VITE_DEV_SERVER_URL': (isDev) ? '"http://localhost:5173"' : 'null'
+diff --git a/main/electron-builder.yml b/main/electron-builder.yml
+index a8a4950..4e4fc97 100644
+--- a/main/electron-builder.yml
++++ b/main/electron-builder.yml
+@@ -21,6 +21,10 @@ win:
+   target:
+   - "nsis"
+   - "portable"
++  # LuaJIT runtime used to run Path of Building headless
++  extraFiles:
++  - from: "pob-runtime/luajit-win64"
++    to: "luajit-win64"
+ linux:
+   target:
+   - "AppImage"
 diff --git a/main/src/AppUpdater.ts b/main/src/AppUpdater.ts
 index 29b51bc..cbeee35 100644
 --- a/main/src/AppUpdater.ts
@@ -259,7 +274,7 @@ index 9d5e69c..b931c29 100644
    props: {
      item: {
 diff --git a/renderer/src/web/price-check/settings-price-check.vue b/renderer/src/web/price-check/settings-price-check.vue
-index a8b764d..481dbd0 100644
+index a8b764d..1b5fef7 100644
 --- a/renderer/src/web/price-check/settings-price-check.vue
 +++ b/renderer/src/web/price-check/settings-price-check.vue
 @@ -50,6 +50,20 @@
@@ -277,7 +292,7 @@ index a8b764d..481dbd0 100644
 +        <div class="italic text-gray-500 mb-3">A Path of Building Community source folder (containing "src" and "runtime"). Leave empty to only compare item mods.</div>
 +        <div class="mb-1">LuaJIT executable</div>
 +        <input v-model.trim="pobLuajit" placeholder="luajit" class="rounded bg-gray-900 px-1 block w-full mb-1" />
-+        <div class="italic text-gray-500">Full path. On Windows: luajit.exe from the "luajit-win64" folder.</div>
++        <div class="italic text-gray-500">Full path. On Windows, leave empty to use the bundled LuaJIT.</div>
 +      </div>
 +    </div>
      <ui-checkbox class="mb-4"
@@ -304,10 +319,10 @@ index a8b764d..481dbd0 100644
        requestPricePrediction: configModelValue(() => configWidget.value, 'requestPricePrediction'),
 diff --git a/main/src/pob/PobCalc.ts b/main/src/pob/PobCalc.ts
 new file mode 100644
-index 0000000..9d1c476
+index 0000000..e6c010e
 --- /dev/null
 +++ b/main/src/pob/PobCalc.ts
-@@ -0,0 +1,210 @@
+@@ -0,0 +1,215 @@
 +import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 +import fs from 'node:fs'
 +import path from 'node:path'
@@ -393,6 +408,11 @@ index 0000000..9d1c476
 +
 +  private start (luajit: string, pobPath: string): Promise<void> {
 +    if (this.proc && this.ready) return this.ready
++
++    if (process.platform === 'win32' && (!luajit || luajit === 'luajit')) {
++      // shipped next to the app executable, see electron-builder.yml
++      luajit = path.join(path.dirname(app.getPath('exe')), 'luajit-win64', 'luajit.exe')
++    }
 +
 +    const srcDir = path.join(pobPath, 'src')
 +    if (!fs.existsSync(path.join(srcDir, 'HeadlessWrapper.lua'))) {

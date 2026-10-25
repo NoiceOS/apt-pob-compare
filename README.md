@@ -18,11 +18,15 @@ Official auto-updates are **disabled** in this build (an official update would r
 
 ## Installation: Windows 10/11
 
-### 1. Download and extract
+### 1. Install the app
 
-From the [**Releases**](../../releases/latest) page, download `Awakened-PoE-Trade-3.29.108-pob-win-x64.zip` and extract it, for example to `C:\Games\Awakened PoE Trade PoB\`.
+From the [**Releases**](../../releases/latest) page, download **one** of:
+- `Awakened-PoE-Trade-Setup-3.29.108-pob-win-x64.exe`: **installer** (recommended), or
+- `Awakened-PoE-Trade-3.29.108-pob-win-x64.zip`: **portable** version, extract it anywhere and run `Awakened PoE Trade.exe`.
 
-It contains the app and a `luajit-win64\` folder (the engine used to run Path of Building in the background).
+If Windows SmartScreen shows a warning (the app is not signed), click **More info → Run anyway**.
+
+LuaJIT (the engine used to run Path of Building in the background) is **bundled**, in the app's `luajit-win64\` folder. Nothing else to install.
 
 ### 2. Get Path of Building Community (source version)
 
@@ -30,11 +34,7 @@ Download [**PathOfBuilding v2.67.2 (zip)**](https://github.com/PathOfBuildingCom
 
 > The installed version of Path of Building (the `.exe` installer) **does not work**: you need this source folder, which contains `src\` and `runtime\`.
 
-### 3. Launch
-
-Run `Awakened PoE Trade.exe`. If Windows SmartScreen shows a warning (the app is not signed), click **More info → Run anyway**.
-
-### 4. Configure
+### 3. Configure
 
 In APT settings → **Price check** → **"Path of Building comparison"** section:
 
@@ -42,9 +42,9 @@ In APT settings → **Price check** → **"Path of Building comparison"** sectio
 |---|---|
 | Build link | `https://pobb.in/xxxx` (pobb.in, pastebin or raw PoB code) |
 | Path of Building folder | `C:\Games\PathOfBuilding-2.67.2` |
-| LuaJIT executable | `C:\Games\Awakened PoE Trade PoB\luajit-win64\luajit.exe` |
+| LuaJIT executable | **leave empty** (uses the bundled LuaJIT) |
 
-Use **full paths**. Tip: Shift + right-click on a file → "Copy as path" (remove the quotes).
+Tip: Shift + right-click on the folder → "Copy as path" (remove the quotes).
 
 ## Installation: Linux x86_64
 
@@ -106,16 +106,15 @@ On the first check, Path of Building starts in the background (about 5 s). After
 - The build's PoB configuration (charges, conditions, main skill) is used as exported.
 - If Path of Building can't parse an item, an error is shown instead of the calculation.
 - Tested with Path of Building 2.67.2 and its development version. Later PoB versions may need an update of this build.
-- The Windows build was compiled on Linux and **has not been tested on a real Windows machine yet**. Feedback welcome.
+- The Windows build was compiled on Linux. Its Path of Building engine was tested under Wine, but the app itself **has not been tested on a real Windows machine yet**. Feedback welcome.
 
 ## Troubleshooting
 
 | Message | Fix |
 |---|---|
-| `Cannot start LuaJIT` | Wrong LuaJIT path (Windows: path to `luajit.exe`; Linux: check with `which luajit`) |
-| `Set the full path to luajit.exe in settings` | Windows: the LuaJIT field must be a full path |
+| `Cannot start LuaJIT` | Windows: leave the LuaJIT field empty, and check `luajit-win64\` is next to `Awakened PoE Trade.exe`. Linux: check the path with `which luajit` |
 | `Path of Building not found` | The folder must contain `src/HeadlessWrapper.lua` (use the source zip, not the installer) |
-| `module 'lua-utf8' not found` | Linux: `lua-utf8.so` missing from `PathOfBuilding/runtime/`. Windows: keep the 3 files of `luajit-win64\` together |
+| `module 'lua-utf8' not found` | Linux: `lua-utf8.so` missing from `PathOfBuilding/runtime/`. Windows: `luajit-win64\` is incomplete, reinstall |
 | `Could not load the build` | Check the link, or re-export the build from PoB |
 
 ## Repository contents
@@ -132,13 +131,14 @@ git apply ../patches/awakened-poe-trade-3.29.108-pob-compare.patch
 cd renderer && npm ci && npm run build
 cd ../main && npm ci && npm run build
 npx electron-builder build --linux AppImage --publish never
-npx electron-builder build --win zip --x64 --publish never -c.win.signAndEditExecutable=false
+# Windows (needs Wine, e.g. inside a distrobox) and main/pob-runtime/luajit-win64 (see below)
+npx electron-builder build --win nsis zip --x64 --publish never
 ```
 
 Lua runtime:
 - Linux `lua-utf8.so`, from [starwing/luautf8](https://github.com/starwing/luautf8) (commit `a47b143`):
   `gcc -O2 -shared -fPIC -I/usr/include/luajit-2.1 lutf8lib.c -o lua-utf8.so`
-- Windows `luajit-win64\`, cross-compiled with mingw-w64 from [LuaJIT](https://github.com/LuaJIT/LuaJIT) v2.1 (commit `a4c0645`):
+- Windows `main/pob-runtime/luajit-win64\`, cross-compiled with mingw-w64 from [LuaJIT](https://github.com/LuaJIT/LuaJIT) v2.1 (commit `a4c0645`):
   `make HOST_CC=gcc CROSS=x86_64-w64-mingw32- TARGET_SYS=Windows BUILDMODE=dynamic`, then
   `x86_64-w64-mingw32-gcc -O2 -shared -I<LuaJIT>/src lutf8lib.c -o lua-utf8.dll -L<LuaJIT>/src -llua51`
 
