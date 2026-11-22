@@ -2,7 +2,7 @@
 
 🇬🇧 [English version](README.md)
 
-Version modifiée et **non officielle** d'[Awakened PoE Trade](https://github.com/SnosMe/awakened-poe-trade) 3.29.108 pour Path of Exile 1, pour **Windows 10/11** et **Linux**.
+Version modifiée et **non officielle** d'[Awakened PoE Trade](https://github.com/SnosMe/awakened-poe-trade) 3.30.102 pour Path of Exile 1, pour **Windows 10/11** et **Linux**.
 Elle ajoute au price check (Ctrl+D) un bloc **« PoB Comparison »** : l'item vérifié est comparé à l'item équipé dans le même slot de ton build Path of Building, et **Path of Building recalcule** le DPS, l'EHP, la vie, les max hit, les résistances, etc.
 
 > ⚠️ Ce n'est pas la version officielle. **Ne signale pas de bug à SnosMe**, ni sur le dépôt officiel d'APT, ni sur celui de Path of Building.
@@ -21,8 +21,8 @@ Les mises à jour automatiques officielles sont **désactivées** dans cette ver
 ### 1. Installer l'application
 
 Depuis la page [**Releases**](../../releases/latest), télécharge **l'un des deux** :
-- `Awakened-PoE-Trade-Setup-3.29.108-pob-win-x64.exe` : **installeur** (recommandé), ou
-- `Awakened-PoE-Trade-3.29.108-pob-win-x64.zip` : version **portable**, à extraire où tu veux, puis lancer `Awakened PoE Trade.exe`.
+- `Awakened-PoE-Trade-Setup-3.30.102-pob-win-x64.exe` : **installeur** (recommandé), ou
+- `Awakened-PoE-Trade-3.30.102-pob-win-x64.zip` : version **portable**, à extraire où tu veux, puis lancer `Awakened PoE Trade.exe`.
 
 Si Windows SmartScreen affiche un avertissement (l'application n'est pas signée), clique sur **Informations complémentaires → Exécuter quand même**.
 
@@ -30,7 +30,7 @@ LuaJIT (le moteur qui fait tourner Path of Building en arrière-plan) est **incl
 
 ### 2. Récupérer Path of Building Community (version source)
 
-Télécharge [**PathOfBuilding v2.67.2 (zip)**](https://github.com/PathOfBuildingCommunity/PathOfBuilding/archive/refs/tags/v2.67.2.zip) et extrais-le, par exemple dans `C:\Jeux\PathOfBuilding-2.67.2\`.
+Télécharge [**PathOfBuilding v2.68.1 (zip)**](https://github.com/PathOfBuildingCommunity/PathOfBuilding/archive/refs/tags/v2.68.1.zip) et extrais-le, par exemple dans `C:\Jeux\PathOfBuilding-2.68.1\`.
 
 > La version installée de Path of Building (l'installeur `.exe`) **ne fonctionne pas** : il faut ce dossier source, qui contient `src\` et `runtime\`.
 
@@ -41,7 +41,7 @@ Dans les réglages d'APT → **Price check** → bloc **« Path of Building comp
 | Champ | Exemple |
 |---|---|
 | Build link | `https://pobb.in/xxxx` (pobb.in, pastebin ou code PoB brut) |
-| Path of Building folder | `C:\Jeux\PathOfBuilding-2.67.2` |
+| Path of Building folder | `C:\Jeux\PathOfBuilding-2.68.1` |
 | LuaJIT executable | **laisser vide** (utilise le LuaJIT inclus) |
 
 Astuce : Maj + clic droit sur le dossier → « Copier en tant que chemin d'accès » (enlève les guillemets).
@@ -51,11 +51,11 @@ Astuce : Maj + clic droit sur le dossier → « Copier en tant que chemin d'acc�
 ### 1. Télécharger
 
 Depuis la page [**Releases**](../../releases/latest) :
-- `Awakened-PoE-Trade-3.29.108-pob.AppImage`
+- `Awakened-PoE-Trade-3.30.102-pob.AppImage`
 - `lua-utf8.so`
 
 ```bash
-chmod +x Awakened-PoE-Trade-3.29.108-pob.AppImage
+chmod +x Awakened-PoE-Trade-3.30.102-pob.AppImage
 ```
 
 ### 2. Installer LuaJIT
@@ -71,7 +71,7 @@ Sur un système immuable (Bazzite, Silverblue…), tu peux passer par Homebrew :
 ### 3. Récupérer Path of Building Community
 
 ```bash
-git clone --depth 1 --branch v2.67.2 https://github.com/PathOfBuildingCommunity/PathOfBuilding.git ~/PathOfBuilding
+git clone --depth 1 --branch v2.68.1 https://github.com/PathOfBuildingCommunity/PathOfBuilding.git ~/PathOfBuilding
 cp lua-utf8.so ~/PathOfBuilding/runtime/
 ```
 
@@ -80,7 +80,7 @@ Le fichier `lua-utf8.so` doit **obligatoirement** être dans le dossier `runtime
 ### 4. Lancer
 
 ```bash
-./Awakened-PoE-Trade-3.29.108-pob.AppImage
+./Awakened-PoE-Trade-3.30.102-pob.AppImage
 ```
 
 ### 5. Configurer
@@ -106,7 +106,7 @@ Au premier check, Path of Building démarre en arrière-plan (~5 s), puis chaque
 - La config PoB du build (charges, conditions, skill principal) est utilisée telle qu'elle a été exportée.
 - Si Path of Building ne sait pas lire un item, une erreur s'affiche à la place du calcul.
 - Les textes du panneau de comparaison sont en anglais.
-- Testé avec Path of Building 2.67.2 et sa version de développement. Une version plus récente de PoB pourrait nécessiter une mise à jour de ce build.
+- Testé avec Path of Building 2.68.1. Une version plus récente de PoB pourrait nécessiter une mise à jour de ce build.
 - La version Windows a été compilée sous Linux. Son moteur Path of Building a été testé sous Wine, mais l'application elle-même **n'a pas encore été testée sur un vrai Windows**. Les retours sont bienvenus.
 
 ## Dépannage
@@ -120,15 +120,15 @@ Au premier check, Path of Building démarre en arrière-plan (~5 s), puis chaque
 
 ## Contenu du dépôt
 
-- `patches/awakened-poe-trade-3.29.108-pob-compare.patch` : les modifications du code source, à appliquer sur le tag `v3.29.108` d'APT (`git apply`).
+- `patches/awakened-poe-trade-3.30.102-pob-compare.patch` : les modifications du code source, à appliquer sur le tag `v3.30.102` d'APT (`git apply`).
 - `licenses/` : licences des projets utilisés.
 
 ### Recompiler soi-même
 
 ```bash
 git clone https://github.com/SnosMe/awakened-poe-trade.git && cd awakened-poe-trade
-git checkout v3.29.108
-git apply ../patches/awakened-poe-trade-3.29.108-pob-compare.patch
+git checkout v3.30.102
+git apply ../patches/awakened-poe-trade-3.30.102-pob-compare.patch
 cd renderer && npm ci && npm run build
 cd ../main && npm ci && npm run build
 npx electron-builder build --linux AppImage --publish never

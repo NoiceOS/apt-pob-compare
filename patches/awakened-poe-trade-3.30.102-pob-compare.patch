@@ -44,10 +44,10 @@ index 8fac182..16fcde4 100644
    name: TName
    payload: TPayload
 diff --git a/main/build/script.mjs b/main/build/script.mjs
-index 40efa38..911fe5a 100644
+index 6bc36de..e4a9ba1 100644
 --- a/main/build/script.mjs
 +++ b/main/build/script.mjs
-@@ -32,6 +32,7 @@ const mainContext = await esbuild.context({
+@@ -38,6 +38,7 @@ const mainContext = await esbuild.context({
    platform: 'node',
    external: ['electron', 'uiohook-napi', 'electron-overlay-window'],
    outfile: 'dist/main.js',
@@ -214,109 +214,6 @@ index d8bb9ca..0a790cc 100644
 +    process.platform === 'linux' ? 1000 : 0
 +  )
 +})
-diff --git a/main/src/proxy.ts b/main/src/proxy.ts
-index cb209c0..db05e24 100644
---- a/main/src/proxy.ts
-+++ b/main/src/proxy.ts
-@@ -9,6 +9,8 @@ const PROXY_HOSTS = [
-   { host: 'poe.kakaogames.com', official: true },
-   { host: 'poe.ninja', official: false },
-   { host: 'www.poeprices.info', official: false },
-+  { host: 'pobb.in', official: false },
-+  { host: 'pastebin.com', official: false },
- ]
- 
- export class HttpProxy {
-diff --git a/renderer/src/web/overlay/widgets.ts b/renderer/src/web/overlay/widgets.ts
-index bdb87d3..3a21853 100644
---- a/renderer/src/web/overlay/widgets.ts
-+++ b/renderer/src/web/overlay/widgets.ts
-@@ -49,6 +49,11 @@ export interface PriceCheckWidget extends Widget {
-   activateStockFilter: boolean
-   merchantOnly: boolean
-   defaultCurrency: string | null
-+  pobLink?: string
-+  pobItemSet?: string
-+  pobCompareCollapsed?: boolean
-+  pobLuajit?: string
-+  pobPath?: string
-   showCursor: boolean
-   requestPricePrediction: boolean
-   builtinBrowser: boolean
-diff --git a/renderer/src/web/price-check/CheckedItem.vue b/renderer/src/web/price-check/CheckedItem.vue
-index 9d5e69c..b931c29 100644
---- a/renderer/src/web/price-check/CheckedItem.vue
-+++ b/renderer/src/web/price-check/CheckedItem.vue
-@@ -8,6 +8,7 @@
-     <price-trend v-else
-       :item="item"
-       :filters="itemFilters" />
-+    <pob-compare :item="item" />
-     <filters-block
-       ref="filtersComponent"
-       :filters="itemFilters"
-@@ -67,6 +68,7 @@ import PricePrediction from './price-prediction/PricePrediction.vue'
- import StackValue from './expected-value/StackValue.vue'
- import DustValue from './expected-value/DustValue.vue'
- import FilterName from './filters/FilterName.vue'
-+import PobCompare from './pob-compare/PobCompare.vue'
- import { CATEGORY_TO_TRADE_ID, createTradeRequest } from './trade/pathofexile-trade'
- import { AppConfig } from '@/web/Config'
- import { FilterPreset } from './filters/interfaces'
-@@ -86,7 +88,8 @@ export default defineComponent({
-     FiltersBlock,
-     FilterName,
-     StackValue,
--    DustValue
-+    DustValue,
-+    PobCompare
-   },
-   props: {
-     item: {
-diff --git a/renderer/src/web/price-check/settings-price-check.vue b/renderer/src/web/price-check/settings-price-check.vue
-index a8b764d..1b5fef7 100644
---- a/renderer/src/web/price-check/settings-price-check.vue
-+++ b/renderer/src/web/price-check/settings-price-check.vue
-@@ -50,6 +50,20 @@
-         <ui-radio v-model="searchStatRange" :value="0">{{ t(':fill_roll_exact') }}</ui-radio>
-       </div>
-     </div>
-+    <div class="border-2 rounded border-gray-700 mb-4">
-+      <div class="bg-gray-700 p-2">Path of Building comparison</div>
-+      <div class="p-2">
-+        <div class="mb-1">Build link</div>
-+        <input v-model.trim="pobLink" placeholder="https://pobb.in/..." class="rounded bg-gray-900 px-1 block w-full mb-1" />
-+        <div class="italic text-gray-500 mb-3">pobb.in, pastebin or raw PoB code. The checked item is compared to the item equipped in the same slot.</div>
-+        <div class="mb-1">Path of Building folder (for DPS / EHP calculations)</div>
-+        <input v-model.trim="pobPath" placeholder="/path/to/PathOfBuilding" class="rounded bg-gray-900 px-1 block w-full mb-1" />
-+        <div class="italic text-gray-500 mb-3">A Path of Building Community source folder (containing "src" and "runtime"). Leave empty to only compare item mods.</div>
-+        <div class="mb-1">LuaJIT executable</div>
-+        <input v-model.trim="pobLuajit" placeholder="luajit" class="rounded bg-gray-900 px-1 block w-full mb-1" />
-+        <div class="italic text-gray-500">Full path. On Windows, leave empty to use the bundled LuaJIT.</div>
-+      </div>
-+    </div>
-     <ui-checkbox class="mb-4"
-       v-model="activateStockFilter">{{ t(':select_stock') }}</ui-checkbox>
-     <ui-checkbox class="mb-4"
-@@ -130,6 +144,18 @@ export default defineComponent({
-       accountName: configModelValue(() => props.config, 'accountName'),
-       showSeller: configModelValue(() => configWidget.value, 'showSeller'),
-       activateStockFilter: configModelValue(() => configWidget.value, 'activateStockFilter'),
-+      pobLink: computed<string>({
-+        get: () => configWidget.value.pobLink ?? '',
-+        set: (value) => { configWidget.value.pobLink = value }
-+      }),
-+      pobPath: computed<string>({
-+        get: () => configWidget.value.pobPath ?? '',
-+        set: (value) => { configWidget.value.pobPath = value }
-+      }),
-+      pobLuajit: computed<string>({
-+        get: () => configWidget.value.pobLuajit ?? '',
-+        set: (value) => { configWidget.value.pobLuajit = value }
-+      }),
-       showCursor: configModelValue(() => configWidget.value, 'showCursor'),
-       builtinBrowser: configModelValue(() => configWidget.value, 'builtinBrowser'),
-       requestPricePrediction: configModelValue(() => configWidget.value, 'requestPricePrediction'),
 diff --git a/main/src/pob/PobCalc.ts b/main/src/pob/PobCalc.ts
 new file mode 100644
 index 0000000..e6c010e
@@ -732,6 +629,65 @@ index 0000000..913a394
 +  const source: string
 +  export default source
 +}
+diff --git a/main/src/proxy.ts b/main/src/proxy.ts
+index cb209c0..db05e24 100644
+--- a/main/src/proxy.ts
++++ b/main/src/proxy.ts
+@@ -9,6 +9,8 @@ const PROXY_HOSTS = [
+   { host: 'poe.kakaogames.com', official: true },
+   { host: 'poe.ninja', official: false },
+   { host: 'www.poeprices.info', official: false },
++  { host: 'pobb.in', official: false },
++  { host: 'pastebin.com', official: false },
+ ]
+ 
+ export class HttpProxy {
+diff --git a/renderer/src/web/overlay/widgets.ts b/renderer/src/web/overlay/widgets.ts
+index bdb87d3..3a21853 100644
+--- a/renderer/src/web/overlay/widgets.ts
++++ b/renderer/src/web/overlay/widgets.ts
+@@ -49,6 +49,11 @@ export interface PriceCheckWidget extends Widget {
+   activateStockFilter: boolean
+   merchantOnly: boolean
+   defaultCurrency: string | null
++  pobLink?: string
++  pobItemSet?: string
++  pobCompareCollapsed?: boolean
++  pobLuajit?: string
++  pobPath?: string
+   showCursor: boolean
+   requestPricePrediction: boolean
+   builtinBrowser: boolean
+diff --git a/renderer/src/web/price-check/CheckedItem.vue b/renderer/src/web/price-check/CheckedItem.vue
+index 34abaa0..795ce15 100644
+--- a/renderer/src/web/price-check/CheckedItem.vue
++++ b/renderer/src/web/price-check/CheckedItem.vue
+@@ -8,6 +8,7 @@
+     <price-trend v-else
+       :item="item"
+       :filters="itemFilters" />
++    <pob-compare :item="item" />
+     <filters-block
+       ref="filtersComponent"
+       :filters="itemFilters"
+@@ -67,6 +68,7 @@ import PricePrediction from './price-prediction/PricePrediction.vue'
+ import StackValue from './expected-value/StackValue.vue'
+ import DustValue from './expected-value/DustValue.vue'
+ import FilterName from './filters/FilterName.vue'
++import PobCompare from './pob-compare/PobCompare.vue'
+ import { CATEGORY_TO_TRADE_ID, createTradeRequest } from './trade/pathofexile-trade'
+ import { AppConfig } from '@/web/Config'
+ import { FilterPreset } from './filters/interfaces'
+@@ -86,7 +88,8 @@ export default defineComponent({
+     FiltersBlock,
+     FilterName,
+     StackValue,
+-    DustValue
++    DustValue,
++    PobCompare
+   },
+   props: {
+     item: {
 diff --git a/renderer/src/web/price-check/pob-compare/PobCompare.vue b/renderer/src/web/price-check/pob-compare/PobCompare.vue
 new file mode 100644
 index 0000000..016e79b
@@ -1690,3 +1646,47 @@ index 0000000..b8958b4
 +
 +  return { engine, ensureLoaded, compare }
 +}
+diff --git a/renderer/src/web/price-check/settings-price-check.vue b/renderer/src/web/price-check/settings-price-check.vue
+index a8b764d..1b5fef7 100644
+--- a/renderer/src/web/price-check/settings-price-check.vue
++++ b/renderer/src/web/price-check/settings-price-check.vue
+@@ -50,6 +50,20 @@
+         <ui-radio v-model="searchStatRange" :value="0">{{ t(':fill_roll_exact') }}</ui-radio>
+       </div>
+     </div>
++    <div class="border-2 rounded border-gray-700 mb-4">
++      <div class="bg-gray-700 p-2">Path of Building comparison</div>
++      <div class="p-2">
++        <div class="mb-1">Build link</div>
++        <input v-model.trim="pobLink" placeholder="https://pobb.in/..." class="rounded bg-gray-900 px-1 block w-full mb-1" />
++        <div class="italic text-gray-500 mb-3">pobb.in, pastebin or raw PoB code. The checked item is compared to the item equipped in the same slot.</div>
++        <div class="mb-1">Path of Building folder (for DPS / EHP calculations)</div>
++        <input v-model.trim="pobPath" placeholder="/path/to/PathOfBuilding" class="rounded bg-gray-900 px-1 block w-full mb-1" />
++        <div class="italic text-gray-500 mb-3">A Path of Building Community source folder (containing "src" and "runtime"). Leave empty to only compare item mods.</div>
++        <div class="mb-1">LuaJIT executable</div>
++        <input v-model.trim="pobLuajit" placeholder="luajit" class="rounded bg-gray-900 px-1 block w-full mb-1" />
++        <div class="italic text-gray-500">Full path. On Windows, leave empty to use the bundled LuaJIT.</div>
++      </div>
++    </div>
+     <ui-checkbox class="mb-4"
+       v-model="activateStockFilter">{{ t(':select_stock') }}</ui-checkbox>
+     <ui-checkbox class="mb-4"
+@@ -130,6 +144,18 @@ export default defineComponent({
+       accountName: configModelValue(() => props.config, 'accountName'),
+       showSeller: configModelValue(() => configWidget.value, 'showSeller'),
+       activateStockFilter: configModelValue(() => configWidget.value, 'activateStockFilter'),
++      pobLink: computed<string>({
++        get: () => configWidget.value.pobLink ?? '',
++        set: (value) => { configWidget.value.pobLink = value }
++      }),
++      pobPath: computed<string>({
++        get: () => configWidget.value.pobPath ?? '',
++        set: (value) => { configWidget.value.pobPath = value }
++      }),
++      pobLuajit: computed<string>({
++        get: () => configWidget.value.pobLuajit ?? '',
++        set: (value) => { configWidget.value.pobLuajit = value }
++      }),
+       showCursor: configModelValue(() => configWidget.value, 'showCursor'),
+       builtinBrowser: configModelValue(() => configWidget.value, 'builtinBrowser'),
+       requestPricePrediction: configModelValue(() => configWidget.value, 'requestPricePrediction'),
